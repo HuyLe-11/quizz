@@ -13,6 +13,12 @@ export function Header() {
       </Link>
 
       <div className="flex items-center gap-4">
+        <Link
+          to="/stats"
+          className="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
+        >
+          Statistics
+        </Link>
         <DarkModeToggle />
       </div>
     </header>

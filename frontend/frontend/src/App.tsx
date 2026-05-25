@@ -4,6 +4,7 @@ import { QuizProvider } from "./contexts/QuizContext";
 import { Header } from "./components/layout/Header";
 import { HomePage } from "./pages/HomePage";
 import { QuizPage } from "./pages/QuizPage";
+import { StatsPage } from "./pages/StatsPage";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/quiz/:examId" element={<QuizPage />} />
+                <Route path="/stats" element={<StatsPage />} />
               </Routes>
             </main>
           </div>

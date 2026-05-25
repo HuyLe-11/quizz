@@ -122,8 +122,36 @@ export function QuizProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const submitQuiz = useCallback(() => {
+    if (!state.exam || state.is_submitted) return;
+
+    const question_results = state.exam.questions.map((question) => ({
+      question_id: question.question_id,
+      type: question.type,
+      is_correct: checkQuestionCorrectness(question, state.answers[question.question_id]),
+    }));
+
+    const correct_answers_count = question_results.filter((item) => item.is_correct).length;
+    const total_questions = question_results.length;
+    const score = total_questions > 0 ? Math.round((correct_answers_count / total_questions) * 100) : 0;
+    const time_spent = state.start_time ? Math.round((Date.now() - state.start_time) / 1000) : 0;
+
+    const subject = MOCK_SUBJECTS.find((item) => item.id === state.exam?.subject_id);
+
+    StatsService.saveAttempt({
+      exam_id: state.exam.id,
+      exam_title: state.exam.title,
+      subject_id: state.exam.subject_id,
+      subject_name: subject?.name ?? "Unknown",
+      score,
+      total_questions,
+      correct_answers_count,
+      time_spent,
+      answers: state.answers,
+      question_results,
+    });
+
     dispatch({ type: "SUBMIT_QUIZ" });
-  }, []);
+  }, [state]);
 
   const resetQuiz = useCallback(() => {
     dispatch({ type: "RESET_QUIZ" });
