@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Quản lý câu hỏi NetQuiz</title>
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:#0d0f14; --s1:#13161f; --s2:#181c27; --b1:#242a3a;
+            --acc:#4fc3f7; --grn:#00e676; --red:#ff5252; --txt:#e8edf8; --dim:#8892b0;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            background: var(--bg); color: var(--txt); 
+            font-family: 'Be Vietnam Pro', sans-serif; line-height: 1.5;
+            display: flex; height: 100vh; overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar { 
+            width: 300px; background: var(--s1); border-right: 1px solid var(--b1); 
+            display: flex; flex-direction: column; 
+        }
+        .sb-header { padding: 20px; border-bottom: 1px solid var(--b1); }
+        .sb-list { flex: 1; overflow-y: auto; padding: 10px; }
+        .week-item { 
+            padding: 12px 15px; margin-bottom: 5px; border-radius: 8px; cursor: pointer;
+            transition: 0.2s; border: 1px solid transparent;
+        }
+        .week-item:hover { background: var(--b1); }
+        .week-item.active { background: var(--b1); border-color: var(--acc); color: var(--acc); }
+
+        /* Main Content */
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .top-bar { 
+            padding: 15px 25px; background: var(--s1); border-bottom: 1px solid var(--b1);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .q-list { flex: 1; overflow-y: auto; padding: 25px; }
+        .q-card { 
+            background: var(--s2); border: 1px solid var(--b1); border-radius: 12px;
+            padding: 15px; margin-bottom: 15px; position: relative;
+        }
+        .q-card:hover { border-color: var(--dim); }
+        .q-actions { position: absolute; top: 15px; right: 15px; display: flex; gap: 8px; }
+
+        /* Form & UI Elements */
+        .btn { 
+            padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; 
+            font-weight: 600; font-family: inherit; transition: 0.2s;
+        }
+        .btn-primary { background: var(--acc); color: #000; }
+        .btn-success { background: var(--grn); color: #000; }
+        .btn-danger { background: var(--red); color: #fff; }
+        .btn-outline { background: transparent; border: 1px solid var(--b1); color: var(--txt); }
+
+        /* Modal Custom */
+        #modal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+            display: none; justify-content: center; align-items: center; z-index: 1000; padding: 20px;
+        }
+        .modal-content { 
+            background: var(--s1); width: 100%; max-width: 800px; max-height: 90vh;
+            border-radius: 16px; border: 1px solid var(--b1); display: flex; flex-direction: column;
+        }
+        .modal-body { padding: 25px; overflow-y: auto; }
+        .modal-footer { padding: 15px 25px; border-top: 1px solid var(--b1); display: flex; justify-content: flex-end; gap: 10px; }
+
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 6px; color: var(--dim); font-size: 0.9rem; }
+        input, textarea, select {
+            width: 100%; background: var(--s2); border: 1px solid var(--b1);
+            color: #fff; padding: 10px; border-radius: 6px; font-family: inherit;
+        }
+        .opt-row { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+        .img-preview { 
+            width: 100%; max-height: 200px; object-fit: contain; 
+            background: #000; border-radius: 8px; margin-top: 10px; display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sb-header">
+        <h2 style="font-size:1.2rem">NetQuiz Admin</h2>
+        <p style="font-size:0.8rem; color:var(--dim)">Quản lý ngân hàng câu hỏi</p>
+    </div>
+    <div class="sb-list" id="weekList"></div>
+    <div style="padding: 15px; border-top: 1px solid var(--b1)">
+        <button class="btn btn-success" style="width:100%" onclick="exportData()">💾 Xuất file data.js</button>
+    </div>
+</div>
+
+<div class="main">
+    <div class="top-bar">
+        <h3 id="currentWeekTitle">Chọn một tuần để sửa</h3>
+        <button class="btn btn-primary" id="btnAdd" disabled onclick="openEditor()">+ Thêm câu hỏi</button>
+    </div>
+    <div class="q-list" id="qList">
+        <div style="text-align:center; margin-top:50px; color:var(--dim)">Vui lòng chọn tuần ở thanh bên trái</div>
+    </div>
+</div>
+
+<div id="modal">
+    <div class="modal-content">
+        <div class="modal-body">
+            <h2 id="modalTitle" style="margin-bottom:20px">Thêm câu hỏi</h2>
+            <div class="form-group">
+                <label>Loại câu hỏi</label>
+                <select id="f-type" onchange="toggleOptionFields()">
+                    <option value="mcq">Trắc nghiệm (MCQ)</option>
+                    <option value="true_false">Đúng / Sai</option>
+                    <option value="fill_in">Điền vào chỗ trống</option>
+                    <option value="matching">Ghép đôi</option>
+                </select>
+            </div>
+            <div class="form-group" id="mcq-multi-wrap" style="display:none">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer">
+                    <input type="checkbox" id="f-multi" style="width:auto">
+                    Cho phép nhiều đáp án đúng
+                </label>
+            </div>
+            <div class="form-group">
+                <label>Nội dung câu hỏi</label>
+                <textarea id="f-question" rows="3"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Ảnh (Local hoặc URL)</label>
+                <div style="display:flex; gap:10px">
+                    <input type="text" id="f-image-url" placeholder="Dán link ảnh vào đây...">
+                    <input type="file" id="f-image-file" style="display:none" accept="image/*" onchange="handleLocalImage(this)">
+                    <button class="btn btn-outline" onclick="document.getElementById('f-image-file').click()">📁 Chọn file</button>
+                </div>
+                <img id="f-img-preview" class="img-preview">
+                <button id="f-img-clear" class="btn btn-danger" style="margin-top:5px; display:none; padding:4px 8px; font-size:0.7rem" onclick="clearImage()">Xóa ảnh</button>
+            </div>
+
+            <div id="options-container" style="margin-top:20px">
+                <label id="opt-label">Các phương án & Đáp án</label>
+                <div id="opt-list"></div>
+                <button class="btn btn-outline" id="btn-add-opt" onclick="addOptionField()" style="margin-top:10px; font-size:0.8rem">+ Thêm phương án</button>
+            </div>
+
+            <div class="form-group" style="margin-top:20px">
+                <label>Giải thích (Explanation)</label>
+                <textarea id="f-explanation" rows="2"></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" onclick="closeEditor()">Hủy</button>
+            <button class="btn btn-primary" onclick="saveQuestion()">Lưu câu hỏi</button>
+        </div>
+    </div>
+</div>
+
+<script src="data.js"></script>
+
+<!-- <script>
+let CURRENT_WEEK = null;
+let EDIT_INDEX = -1;
+
+// Khởi tạo và đồng bộ LocalStorage
+const saved = localStorage.getItem('NETQUIZ_DATA');
+if(saved) {
+    try { DATA = JSON.parse(saved); } catch(e) {}
+}
+
+function init() {
+    const weekList = document.getElementById('weekList');
+    weekList.innerHTML = '';
+    Object.keys(DATA.week_info).forEach(wk => {
+        const div = document.createElement('div');
+        div.className = 'week-item';
+        div.id = `wk-${wk}`;
+        div.innerHTML = `<strong>${DATA.week_info[wk].label}</strong><br><small>${DATA.week_info[wk].desc}</small>`;
+        div.onclick = () => selectWeek(wk);
+        weekList.appendChild(div);
+    });
+}
+
+function selectWeek(wk) {
+    CURRENT_WEEK = wk;
+    document.querySelectorAll('.week-item').forEach(el => el.classList.remove('active'));
+    document.getElementById(`wk-${wk}`).classList.add('active');
+    document.getElementById('currentWeekTitle').innerText = DATA.week_info[wk].label;
+    document.getElementById('btnAdd').disabled = false;
+    renderQuestions();
+}
+
+function renderQuestions() {
+    const list = document.getElementById('qList');
+    list.innerHTML = '';
+    const qs = DATA.weeks[CURRENT_WEEK] || [];
+    
+    if(qs.length === 0) {
+        list.innerHTML = `<div style="text-align:center; margin-top:50px; color:var(--dim)">Chưa có câu hỏi nào trong tuần này.</div>`;
+        return;
+    }
+
+    qs.forEach((q, i) => {
+        const card = document.createElement('div');
+        card.className = 'q-card';
+        card.innerHTML = `
+            <div class="q-actions">
+                <button class="btn btn-outline" style="padding:4px 8px" onclick="openEditor(${i})">Sửa</button>
+                <button class="btn btn-danger" style="padding:4px 8px" onclick="deleteQuestion(${i})">Xóa</button>
+            </div>
+            <div style="margin-bottom:8px">
+                <span style="background:var(--b1); padding:2px 6px; border-radius:4px; font-size:0.7rem; color:var(--acc)">${q.type.toUpperCase()}</span>
+                <span style="color:var(--dim); font-size:0.7rem; margin-left:10px">ID: ${q.id}</span>
+            </div>
+            <div style="padding-right:100px; font-weight:500">${q.question}</div>
+            ${q.image ? `<div style="margin-top:10px; color:var(--grn); font-size:0.75rem">🖼 Đính kèm: ${q.image.startsWith('data:') ? 'Ảnh local' : q.image}</div>` : ''}
+        `;
+        list.appendChild(card);
+    });
+}
+
+// Xử lý Ảnh Local
+function handleLocalImage(input) {
+    const file = input.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            document.getElementById('f-image-url').value = ''; // Xóa URL nếu dùng file
+            showPreview(e.target.result);
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+function showPreview(src) {
+    const img = document.getElementById('f-img-preview');
+    img.src = src;
+    img.style.display = 'block';
+    document.getElementById('f-img-clear').style.display = 'inline-block';
+}
+
+function clearImage() {
+    document.getElementById('f-image-url').value = '';
+    document.getElementById('f-image-file').value = '';
+    document.getElementById('f-img-preview').style.display = 'none';
+    document.getElementById('f-img-clear').style.display = 'none';
+}
+
+// Editor Logic
+function openEditor(idx = -1) {
+    EDIT_INDEX = idx;
+    document.getElementById('modal').style.display = 'flex';
+    document.getElementById('opt-list').innerHTML = '';
+    clearImage();
+
+    if(idx === -1) {
+        document.getElementById('modalTitle').innerText = "Thêm câu hỏi mới";
+        document.getElementById('f-type').value = 'mcq';
+        document.getElementById('f-question').value = '';
+        document.getElementById('f-explanation').value = '';
+        addOptionField(); addOptionField(); addOptionField(); addOptionField();
+    } else {
+        const q = DATA.weeks[CURRENT_WEEK][idx];
+        document.getElementById('modalTitle').innerText = "Sửa câu hỏi";
+        document.getElementById('f-type').value = q.type;
+        document.getElementById('f-question').value = q.question;
+        document.getElementById('f-explanation').value = q.explanation || '';
+        
+        if(q.image) {
+            if(!q.image.startsWith('data:')) document.getElementById('f-image-url').value = q.image;
+            showPreview(q.image);
+        }
+
+        // Render options dựa trên loại
+        if(q.type === 'mcq') {
+            q.options.forEach(opt => addOptionField(opt.text, q.answer.includes(opt.key)));
+        } else if(q.type === 'true_false') {
+            addOptionField("Đúng", q.answer.includes("T"));
+            addOptionField("Sai", q.answer.includes("F"));
+        } else if(q.type === 'fill_in') {
+            addOptionField(q.answer[0], true);
+        }
+    }
+    toggleOptionFields();
+}
+
+function toggleOptionFields() {
+    const type = document.getElementById('f-type').value;
+    const btnAdd = document.getElementById('btn-add-opt');
+    const label = document.getElementById('opt-label');
+    
+    btnAdd.style.display = (type === 'mcq') ? 'block' : 'none';
+    
+    if(type === 'fill_in') label.innerText = "Đáp án đúng (Điền từ)";
+    else if(type === 'true_false') label.innerText = "Chọn đáp án đúng";
+    else label.innerText = "Các phương án (Tích chọn đáp án đúng)";
+}
+
+function addOptionField(text = '', isCorrect = false) {
+    const type = document.getElementById('f-type').value;
+    const container = document.getElementById('opt-list');
+    const div = document.createElement('div');
+    div.className = 'opt-row';
+    
+    const inputType = (type === 'mcq') ? 'checkbox' : 'radio';
+    const radioName = (type !== 'mcq') ? 'correct-opt' : '';
+
+    div.innerHTML = `
+        <input type="${inputType}" name="${radioName}" class="opt-correct" ${isCorrect ? 'checked' : ''} style="width:20px">
+        <input type="text" class="opt-text" value="${text}" placeholder="Nội dung đáp án...">
+        ${type === 'mcq' ? `<button onclick="this.parentElement.remove()" style="background:none; border:none; color:var(--red); cursor:pointer">✕</button>` : ''}
+    `;
+    container.appendChild(div);
+}
+
+function saveQuestion() {
+    const type = document.getElementById('f-type').value;
+    const question = document.getElementById('f-question').value;
+    const explanation = document.getElementById('f-explanation').value;
+    const imgUrl = document.getElementById('f-image-url').value;
+    const imgPreview = document.getElementById('f-img-preview').src;
+    
+    let finalImg = imgUrl || (imgPreview.startsWith('data:') ? imgPreview : '');
+
+    const optRows = document.querySelectorAll('.opt-row');
+    let options = [];
+    let answer = [];
+
+    if(type === 'mcq') {
+        optRows.forEach((row, i) => {
+            const key = String.fromCharCode(65 + i); // A, B, C, D
+            const txt = row.querySelector('.opt-text').value;
+            options.push({ key: key, text: txt });
+            if(row.querySelector('.opt-correct').checked) answer.push(key);
+        });
+    } else if(type === 'true_false') {
+        options = [{key:"T", text:"Đúng"}, {key:"F", text:"Sai"}];
+        const radios = document.getElementsByName('correct-opt');
+        answer = [radios[0].checked ? "T" : "F"];
+    } else if(type === 'fill_in') {
+        answer = [optRows[0].querySelector('.opt-text').value];
+    }
+
+    const newQ = {
+        id: EDIT_INDEX === -1 ? Date.now() : DATA.weeks[CURRENT_WEEK][EDIT_INDEX].id,
+        type: type,
+        question: question,
+        options: options,
+        answer: answer,
+        image: finalImg,
+        explanation: explanation
+    };
+
+    if(!DATA.weeks[CURRENT_WEEK]) DATA.weeks[CURRENT_WEEK] = [];
+    
+    if(EDIT_INDEX === -1) DATA.weeks[CURRENT_WEEK].push(newQ);
+    else DATA.weeks[CURRENT_WEEK][EDIT_INDEX] = newQ;
+
+    syncAndReload();
+    closeEditor();
+}
+
+function deleteQuestion(idx) {
+    if(confirm("Bạn chắc chắn muốn xóa câu hỏi này?")) {
+        DATA.weeks[CURRENT_WEEK].splice(idx, 1);
+        syncAndReload();
+    }
+}
+
+function syncAndReload() {
+    localStorage.setItem('NETQUIZ_DATA', JSON.stringify(DATA));
+    renderQuestions();
+}
+
+function closeEditor() { document.getElementById('modal').style.display = 'none'; }
+
+function exportData() {
+    const content = "let DATA = " + JSON.stringify(DATA, null, 2) + ";";
+    const blob = new Blob([content], {type: "text/javascript"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "data.js";
+    a.click();
+    alert("File data.js đã được tải xuống. Hãy chép đè nó vào thư mục code của bạn.");
+}
+
+init();
+</script> -->
+
+<script>
+let CURRENT_WEEK = null;
+let EDIT_INDEX = -1;
+let CURRENT_IMAGE_BASE64 = "";
+
+function safeArray(value) {
+    if (Array.isArray(value)) return value.filter(v => v !== undefined && v !== null && String(v).trim() !== '');
+    if (value === undefined || value === null || value === '') return [];
+    return [value];
+}
+
+function normalizeQuestion(q) {
+    if (!q || typeof q !== 'object') return q;
+
+    if (q.type === 'mcq') {
+        if (!Array.isArray(q.options) && Array.isArray(q.choices)) {
+            q.options = q.choices.map(c => ({
+                key: c.key,
+                text: c.text ?? c.label ?? ''
+            }));
+        }
+        if (!Array.isArray(q.options)) q.options = [];
+        q.answer = safeArray(q.answer);
+        q.multi = typeof q.multi === 'boolean' ? q.multi : q.answer.length > 1;
+        q.subtype = q.subtype || 'mcq';
+    } else if (q.type === 'true_false') {
+        if (!q.subtype) q.subtype = 'simple_tf';
+        if (Array.isArray(q.answer)) q.answer = q.answer[0] ?? '';
+        if (!q.options) q.options = [
+            { key: 'T', text: 'Đúng' },
+            { key: 'F', text: 'Sai' }
+        ];
+    } else if (q.type === 'fill_in') {
+        if (q.answers && typeof q.answers === 'object') {
+            // giữ nguyên
+        } else if (Array.isArray(q.answer) && q.answer.length > 0) {
+            q.answers = { answer: q.answer[0] };
+        } else {
+            q.answers = q.answers || {};
+        }
+    } else if (q.type === 'matching') {
+        if (!Array.isArray(q.choices) && Array.isArray(q.options)) {
+            q.choices = q.options.map(c => ({ key: c.key, label: c.label ?? c.text ?? '' }));
+        }
+        if (!Array.isArray(q.choices)) q.choices = [];
+        if (!Array.isArray(q.matches)) q.matches = [];
+    }
+    return q;
+}
+
+function normalizeData() {
+    if (!DATA || !DATA.weeks) return;
+    Object.keys(DATA.weeks).forEach(wk => {
+        const arr = DATA.weeks[wk];
+        if (Array.isArray(arr)) arr.forEach(normalizeQuestion);
+    });
+}
+
+function init() {
+    const saved = localStorage.getItem('NETQUIZ_DATA');
+    if (saved) {
+        try { DATA = JSON.parse(saved); } catch (e) { console.error('Lỗi data:', e); }
+    }
+    normalizeData();
+
+    const weekList = document.getElementById('weekList');
+    weekList.innerHTML = '';
+
+    const weeks = Object.keys(DATA.weeks || {});
+    weeks.forEach(wk => {
+        const info = (DATA.week_info && DATA.week_info[wk]) ? DATA.week_info[wk] : { label: 'Tuần ' + wk, desc: '' };
+        const div = document.createElement('div');
+        div.className = 'week-item';
+        div.id = `wk-${wk}`;
+        div.innerHTML = `<strong>${info.label}</strong><br><small>${info.desc}</small>`;
+        div.onclick = () => selectWeek(wk);
+        weekList.appendChild(div);
+    });
+}
+
+function selectWeek(wk) {
+    CURRENT_WEEK = wk;
+    document.querySelectorAll('.week-item').forEach(el => el.classList.remove('active'));
+    const target = document.getElementById(`wk-${wk}`);
+    if (target) target.classList.add('active');
+
+    document.getElementById('currentWeekTitle').innerText = (DATA.week_info && DATA.week_info[wk] ? DATA.week_info[wk].label : 'Tuần ' + wk);
+    document.getElementById('btnAdd').disabled = false;
+    renderQuestions();
+}
+
+function renderQuestions() {
+    const list = document.getElementById('qList');
+    list.innerHTML = '';
+    const qs = (DATA.weeks && DATA.weeks[CURRENT_WEEK]) || [];
+
+    if (qs.length === 0) {
+        list.innerHTML = `<div style="text-align:center; margin-top:50px; color:var(--dim)">Chưa có câu hỏi.</div>`;
+        return;
+    }
+
+    qs.forEach((q, i) => {
+        const card = document.createElement('div');
+        card.className = 'q-card';
+        const badge = q.type === 'mcq' && q.multi ? 'MCQ (Nhiều đáp án)' : (q.type || '').toUpperCase();
+        card.innerHTML = `
+            <div class="q-actions">
+                <button class="btn btn-outline" style="padding:4px 8px" onclick="openEditor(${i})">Sửa</button>
+                <button class="btn btn-danger" style="padding:4px 8px" onclick="deleteQuestion(${i})">Xóa</button>
+            </div>
+            <div style="margin-bottom:8px">
+                <span style="background:var(--b1); padding:2px 6px; border-radius:4px; font-size:0.7rem; color:var(--acc)">${badge}</span>
+                <span style="color:var(--dim); font-size:0.7rem; margin-left:10px">ID: ${q.id}</span>
+            </div>
+            <div style="padding-right:100px; font-weight:500">${(q.question || '').substring(0, 150)}${(q.question || '').length > 150 ? '...' : ''}</div>
+            ${q.image ? `<div style="margin-top:10px; color:var(--grn); font-size:0.75rem">🖼 Đính kèm: ${q.image.startsWith('data:') ? 'Ảnh local' : q.image}</div>` : ''}
+        `;
+        list.appendChild(card);
+    });
+}
+
+function toggleOptionFields() {
+    const type = document.getElementById('f-type').value;
+    const container = document.getElementById('opt-list');
+    const btnAdd = document.getElementById('btn-add-opt');
+    const label = document.getElementById('opt-label');
+    const multiWrap = document.getElementById('mcq-multi-wrap');
+
+    container.innerHTML = '';
+
+    if (type === 'matching') {
+        label.innerText = 'Cấu trúc Matching (Cột trái ghép với Cột phải)';
+        btnAdd.style.display = 'none';
+        multiWrap.style.display = 'none';
+        container.innerHTML = `
+            <div style="margin-bottom:15px">
+                <label style="color:var(--grn); font-size:0.8rem">1. Danh sách lựa chọn (Cột phải - A, B, C...)</label>
+                <div id="matching-choices-area"></div>
+                <button class="btn btn-outline" style="font-size:0.7rem; margin-top:5px" onclick="addMatchingChoiceRow()">+ Thêm lựa chọn</button>
+            </div>
+            <div>
+                <label style="color:var(--acc); font-size:0.8rem">2. Các vế cần ghép (Cột trái)</label>
+                <div id="matching-matches-area"></div>
+                <button class="btn btn-outline" style="font-size:0.7rem; margin-top:5px" onclick="addMatchingMatchRow()">+ Thêm vế ghép</button>
+            </div>
+        `;
+    } else if (type === 'fill_in') {
+        label.innerText = 'Các ô đáp án (key / giá trị)';
+        btnAdd.style.display = 'block';
+        btnAdd.innerText = '+ Thêm ô đáp án';
+        multiWrap.style.display = 'none';
+    } else if (type === 'true_false') {
+        label.innerText = 'Chọn đáp án đúng';
+        btnAdd.style.display = 'none';
+        multiWrap.style.display = 'none';
+    } else {
+        label.innerText = 'Các phương án & Đáp án';
+        btnAdd.style.display = 'block';
+        btnAdd.innerText = '+ Thêm phương án';
+        multiWrap.style.display = 'block';
+    }
+}
+
+function addOptionField(text = '', isCorrect = false) {
+    const type = document.getElementById('f-type').value;
+    const container = document.getElementById('opt-list');
+    const div = document.createElement('div');
+    div.className = 'opt-row';
+    div.style = 'display:flex; gap:10px; align-items:center; margin-bottom:8px';
+
+    const inputType = (type === 'true_false') ? 'radio' : 'checkbox';
+    const name = (type === 'true_false') ? 'correct-group' : '';
+
+    div.innerHTML = `
+        <input type="${inputType}" name="${name}" class="opt-check" ${isCorrect ? 'checked' : ''} style="width:20px">
+        <input type="text" class="opt-text" value="${String(text).replace(/"/g, '&quot;')}" placeholder="Nội dung..." style="flex:1">
+        ${type === 'mcq' ? `<button onclick="this.parentElement.remove()" style="background:none; border:none; color:var(--red); cursor:pointer">✕</button>` : ''}
+    `;
+    container.appendChild(div);
+}
+
+function addFillInRow(key = '', value = '') {
+    const container = document.getElementById('opt-list');
+    const div = document.createElement('div');
+    div.className = 'opt-row';
+    div.style = 'display:flex; gap:10px; align-items:center; margin-bottom:8px';
+    div.innerHTML = `
+        <input type="text" class="fill-key" value="${String(key).replace(/"/g, '&quot;')}" placeholder="Tên ô (vd: destination_ip)" style="flex:1">
+        <input type="text" class="fill-value" value="${String(value).replace(/"/g, '&quot;')}" placeholder="Đáp án..." style="flex:1">
+        <button onclick="this.parentElement.remove()" style="background:none; border:none; color:var(--red); cursor:pointer">✕</button>
+    `;
+    container.appendChild(div);
+}
+
+function addMatchingChoiceRow(label = '') {
+    const area = document.getElementById('matching-choices-area');
+    const count = area.children.length;
+    const key = String.fromCharCode(65 + count);
+    const div = document.createElement('div');
+    div.className = 'choice-row';
+    div.style = 'display:flex; gap:10px; margin-bottom:5px';
+    div.innerHTML = `
+        <span style="color:var(--grn); font-weight:bold; width:20px">${key}</span>
+        <input type="text" class="choice-label" value="${String(label).replace(/"/g, '&quot;')}" placeholder="Tên lựa chọn..." style="flex:1" oninput="refreshMatchDropdowns()">
+        <button onclick="this.parentElement.remove(); refreshMatchDropdowns();" style="border:none; background:none; color:var(--red)">✕</button>
+    `;
+    area.appendChild(div);
+    refreshMatchDropdowns();
+}
+
+function addMatchingMatchRow(item = '', selectedKey = 'A') {
+    const area = document.getElementById('matching-matches-area');
+    const div = document.createElement('div');
+    div.className = 'match-row';
+    div.style = 'display:flex; gap:10px; margin-bottom:10px';
+
+    const choiceInputs = document.querySelectorAll('.choice-label');
+    let optionsHtml = '';
+    choiceInputs.forEach((input, i) => {
+        const key = String.fromCharCode(65 + i);
+        optionsHtml += `<option value="${key}" ${key === selectedKey ? 'selected' : ''}>${key}: ${input.value}</option>`;
+    });
+
+    div.innerHTML = `
+        <textarea class="match-item-text" placeholder="Nội dung vế trái..." style="flex:2; height:40px">${String(item).replace(/</g,'&lt;')}</textarea>
+        <select class="match-key-select" style="flex:1">${optionsHtml}</select>
+        <button onclick="this.parentElement.remove()" style="border:none; background:none; color:var(--red)">✕</button>
+    `;
+    area.appendChild(div);
+}
+
+function refreshMatchDropdowns() {
+    const choiceInputs = document.querySelectorAll('.choice-label');
+    const selects = document.querySelectorAll('.match-key-select');
+
+    let optionsHtml = '';
+    choiceInputs.forEach((input, i) => {
+        const key = String.fromCharCode(65 + i);
+        optionsHtml += `<option value="${key}">${key}: ${input.value}</option>`;
+    });
+
+    selects.forEach(sel => {
+        const currentVal = sel.value;
+        sel.innerHTML = optionsHtml;
+        sel.value = currentVal;
+    });
+}
+
+function openEditor(idx = -1) {
+    EDIT_INDEX = idx;
+    document.getElementById('modal').style.display = 'flex';
+    CURRENT_IMAGE_BASE64 = '';
+    document.getElementById('f-img-preview').style.display = 'none';
+    document.getElementById('f-image-url').value = '';
+    document.getElementById('f-image-file').value = '';
+
+    if (idx === -1) {
+        document.getElementById('modalTitle').innerText = 'Thêm câu hỏi mới';
+        document.getElementById('f-question').value = '';
+        document.getElementById('f-explanation').value = '';
+        document.getElementById('f-type').value = 'mcq';
+        document.getElementById('f-multi').checked = false;
+        toggleOptionFields();
+        addOptionField();
+        addOptionField();
+        addOptionField();
+        addOptionField();
+        return;
+    }
+
+    const q = DATA.weeks[CURRENT_WEEK][idx];
+    document.getElementById('modalTitle').innerText = 'Sửa câu hỏi';
+    document.getElementById('f-type').value = q.type;
+    document.getElementById('f-question').value = q.question || '';
+    document.getElementById('f-explanation').value = q.explanation || '';
+
+    if (q.image) {
+        if (!String(q.image).startsWith('data:')) document.getElementById('f-image-url').value = q.image;
+        CURRENT_IMAGE_BASE64 = q.image;
+        showPreview(q.image);
+    }
+
+    toggleOptionFields();
+
+    if (q.type === 'mcq') {
+        document.getElementById('f-multi').checked = !!q.multi || safeArray(q.answer).length > 1;
+        (q.options || q.choices || []).forEach(opt => addOptionField(opt.text ?? opt.label ?? '', safeArray(q.answer).includes(opt.key)));
+    } else if (q.type === 'true_false') {
+        const ans = Array.isArray(q.answer) ? q.answer[0] : q.answer;
+        addOptionField('Đúng', ans === 'T' || ans === 'Đúng');
+        addOptionField('Sai', ans === 'F' || ans === 'Sai');
+    } else if (q.type === 'fill_in') {
+        const answers = q.answers || {};
+        const entries = Object.entries(answers);
+        if (entries.length === 0) addFillInRow('', '');
+        else entries.forEach(([k, v]) => addFillInRow(k, v));
+    } else if (q.type === 'matching') {
+        (q.choices || []).forEach(c => addMatchingChoiceRow(c.label ?? c.text ?? ''));
+        (q.matches || []).forEach(m => addMatchingMatchRow(m.item, m.answer_key));
+        if ((q.choices || []).length === 0) addMatchingChoiceRow('');
+        if ((q.matches || []).length === 0) addMatchingMatchRow('');
+    }
+}
+
+function saveQuestion() {
+    const type = document.getElementById('f-type').value;
+    const question = document.getElementById('f-question').value;
+    const explanation = document.getElementById('f-explanation').value;
+    const imgUrl = document.getElementById('f-image-url').value.trim();
+    const preview = document.getElementById('f-img-preview').src;
+    const finalImg = imgUrl || (preview && String(preview).startsWith('data:') ? preview : CURRENT_IMAGE_BASE64 || '');
+
+    if (!DATA.weeks[CURRENT_WEEK]) DATA.weeks[CURRENT_WEEK] = [];
+
+    const base = {
+        id: EDIT_INDEX === -1 ? Date.now() : DATA.weeks[CURRENT_WEEK][EDIT_INDEX].id,
+        week: parseInt(CURRENT_WEEK, 10),
+        type,
+        question,
+        explanation,
+        image: finalImg
+    };
+
+    if (type === 'mcq') {
+        const rows = document.querySelectorAll('.opt-row');
+        const options = [];
+        const answer = [];
+        rows.forEach((row, i) => {
+            const key = String.fromCharCode(65 + i);
+            const txt = row.querySelector('.opt-text')?.value ?? '';
+            const checked = !!row.querySelector('.opt-check')?.checked;
+            options.push({ key, text: txt });
+            if (checked) answer.push(key);
+        });
+
+        const multi = document.getElementById('f-multi').checked || answer.length > 1;
+        const normalizedAnswer = multi ? answer : answer.slice(0, 1);
+
+        if (options.length === 0) {
+            alert('MCQ cần ít nhất một phương án.');
+            return;
+        }
+        if (normalizedAnswer.length === 0) {
+            alert('Chọn ít nhất một đáp án đúng.');
+            return;
+        }
+
+        base.options = options;
+        base.answer = normalizedAnswer;
+        base.multi = multi;
+        base.subtype = 'mcq';
+    } else if (type === 'true_false') {
+        const rows = document.querySelectorAll('.opt-row');
+        const options = [];
+        let answer = '';
+        rows.forEach((row, i) => {
+            const key = i === 0 ? 'T' : 'F';
+            const txt = row.querySelector('.opt-text')?.value ?? (key === 'T' ? 'Đúng' : 'Sai');
+            const checked = !!row.querySelector('.opt-check')?.checked;
+            options.push({ key, text: txt });
+            if (checked) answer = key;
+        });
+
+        if (!answer) {
+            alert('Chọn Đúng hoặc Sai.');
+            return;
+        }
+
+        base.options = options;
+        base.answer = answer;
+        base.subtype = 'simple_tf';
+    } else if (type === 'fill_in') {
+        const rows = document.querySelectorAll('#opt-list .opt-row');
+        const answers = {};
+        rows.forEach(row => {
+            const key = (row.querySelector('.fill-key')?.value || '').trim();
+            const val = (row.querySelector('.fill-value')?.value || '').trim();
+            if (key) answers[key] = val;
+        });
+
+        if (Object.keys(answers).length === 0) {
+            alert('Fill-in cần ít nhất một ô đáp án.');
+            return;
+        }
+
+        base.answers = answers;
+        base.subtype = 'fill_in';
+    } else if (type === 'matching') {
+        const choiceRows = document.querySelectorAll('.choice-row');
+        let choices = [];
+        choiceRows.forEach((row, i) => {
+            choices.push({
+                key: String.fromCharCode(65 + i),
+                label: row.querySelector('.choice-label')?.value ?? ''
+            });
+        });
+
+        const matchRows = document.querySelectorAll('.match-row');
+        let matches = [];
+        matchRows.forEach(row => {
+            const aKey = row.querySelector('.match-key-select')?.value || '';
+            const choice = choices.find(c => c.key === aKey);
+            matches.push({
+                item: row.querySelector('.match-item-text')?.value ?? '',
+                answer_key: aKey,
+                answer_label: choice ? choice.label : ''
+            });
+        });
+
+        base.choices = choices;
+        base.matches = matches;
+        base.subtype = 'matching';
+    }
+
+    if (EDIT_INDEX === -1) DATA.weeks[CURRENT_WEEK].push(base);
+    else DATA.weeks[CURRENT_WEEK][EDIT_INDEX] = base;
+
+    normalizeData();
+    syncAndReload();
+    closeEditor();
+}
+
+function handleLocalImage(input) {
+    const file = input.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            CURRENT_IMAGE_BASE64 = e.target.result;
+            document.getElementById('f-image-url').value = '';
+            showPreview(e.target.result);
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+function showPreview(src) {
+    const img = document.getElementById('f-img-preview');
+    img.src = src;
+    img.style.display = 'block';
+    document.getElementById('f-img-clear').style.display = 'inline-block';
+}
+
+function clearImage() {
+    CURRENT_IMAGE_BASE64 = '';
+    document.getElementById('f-image-url').value = '';
+    document.getElementById('f-image-file').value = '';
+    document.getElementById('f-img-preview').style.display = 'none';
+    document.getElementById('f-img-clear').style.display = 'none';
+}
+
+function deleteQuestion(idx) {
+    if (confirm('Bạn chắc chắn muốn xóa câu hỏi này?')) {
+        DATA.weeks[CURRENT_WEEK].splice(idx, 1);
+        syncAndReload();
+    }
+}
+
+function syncAndReload() {
+    localStorage.setItem('NETQUIZ_DATA', JSON.stringify(DATA));
+    normalizeData();
+    renderQuestions();
+}
+
+function closeEditor() {
+    document.getElementById('modal').style.display = 'none';
+}
+
+function exportData() {
+    normalizeData();
+    const content = 'let DATA = ' + JSON.stringify(DATA, null, 2) + ';';
+    const blob = new Blob([content], { type: 'text/javascript' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'data.js';
+    a.click();
+    alert('File data.js đã được tải xuống. Hãy chép đè nó vào thư mục code của bạn.');
+}
+
+window.onload = init;
+</script>
+
+</body>
+</html>

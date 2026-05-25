@@ -1,0 +1,483 @@
+// AUTO-GENERATED — Không chỉnh sửa tay.
+// Source  : extracted_questions92106.json
+// Script  : process_quiz.py
+// Format  : NetQuiz v2 DATA
+// 'use strict';
+
+let DATA = {
+  "weeks": {
+    "7": [
+      {
+        "id": 1,
+        "week": 7,
+        "question": "một phần,Các phát biểu nào sau đây KHÔNG chính xác,Select one or more:,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "Gói tin SYN của TCP có thể chứa phần payload"
+          },
+          {
+            "key": "B",
+            "text": "TCP không cần sử dụng cơ chế checksum"
+          },
+          {
+            "key": "C",
+            "text": "TCP sẽ luôn cố gắng tận dụng tối đa bằng thông còn rỗi của mạng"
+          },
+          {
+            "key": "D",
+            "text": "TCP tự động điều chỉnh tốc độ truyền dữ liệu để tránh tắc nghẽn trên mạng"
+          },
+          {
+            "key": "E",
+            "text": "TCP có thể làm giảm bớt tắc nghẽn trên mạng internet"
+          },
+          {
+            "key": "F",
+            "text": "Giao thức TCP là giao thức giao vận đảm bảo truyền dữ liệu tin cậy duy nhất trên mạng Internet"
+          },
+          {
+            "key": "G",
+            "text": "TCP có thể đảm bảo truyền dữ liệu tin cậy và bảo mật"
+          },
+          {
+            "key": "H",
+            "text": "Độ trễ của dữ liệu truyền qua giao thức là luôn được đảm bảo,I. Các gói tin dữ liệu và ACK của TCP có định dạng giống nhau,J. Trong header của TCP có chứa địa chỉ IP 32 bit của máy nguồn và máy đích"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 13,
+        "week": 7,
+        "question": "Trong giao thức TCP, bên gửi sẽ nhận biết sự tắc nghẽn của mạng bằng cách nào?,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "B",
+            "text": "Bên gửi nhận biết tắc nghẽn khi sau khoảng thời gian timeout không nhận được gói tin ACK hoặc khi,nhận được 3 gói tin ACK trùng lặp"
+          },
+          {
+            "key": "C",
+            "text": "Router sẽ phát hiện tắc nghẽn dựa trên lưu lượng dữ liệu cần định tuyến và gửi lại thông báo báo tắc,nghẽn cho bên gửi"
+          },
+          {
+            "key": "D",
+            "text": "Bên nhận sẽ phát hiện tắc nghẽn dựa vào sự mất mát gói tin của bên gửi và gửi thông báo báo tắc nghẽn,cho bên gửi"
+          }
+        ],
+        "answer": [
+          "B"
+        ],
+        "multi": false
+      },
+      {
+        "id": 16,
+        "week": 7,
+        "question": "Khi sử dụng giao thức TCP, bộ đệm của bên nhận bị đầy. Bên nhận sẽ làm gì?,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "Thiết lập cờ FIN trong gói ACK để báo cho bên gửi không gửi dữ liệu"
+          },
+          {
+            "key": "B",
+            "text": "Làm trễ gói tin ACK và không gửi cho đến khi bộ đệm không bị đầy"
+          },
+          {
+            "key": "C",
+            "text": "Thiết lập giá trị trường số biên nhận (ACK number) bằng 0"
+          },
+          {
+            "key": "D",
+            "text": "Gửi gói tin ACK với tham số cửa sổ nhận (receiving window) bằng 0"
+          }
+        ],
+        "answer": [
+          "D"
+        ],
+        "multi": false
+      },
+      {
+        "id": 17,
+        "week": 7,
+        "question": "một phần,Đâu là các địa chỉ IP hợp lệ của các end host,Select one or more:,✓",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "172.14.56.0/24,✗,☐"
+          },
+          {
+            "key": "B",
+            "text": "111.123.53.45/32,✓"
+          },
+          {
+            "key": "C",
+            "text": "231.43.67.32,✓,✓"
+          },
+          {
+            "key": "D",
+            "text": "192.165.263.45/24,✗,☐"
+          },
+          {
+            "key": "E",
+            "text": "45.21.32.0.4,☐"
+          },
+          {
+            "key": "F",
+            "text": "192.168.1.3,☐"
+          },
+          {
+            "key": "G",
+            "text": "1.1.1.1/31,✓"
+          },
+          {
+            "key": "H",
+            "text": "24.56.13.255,✗"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 18,
+        "week": 7,
+        "question": "một phần,Hai máy tính có địa chỉ 192.168.0.4 và 192.168.12.223 cùng được cắm vào 1 switch.,Netmask của các địa chỉ này phải đặt bằng bao nhiêu để hai máy có thể ping được tới nhau?",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "255.255.248.0"
+          },
+          {
+            "key": "B",
+            "text": "255.255.252.0"
+          },
+          {
+            "key": "C",
+            "text": "255.255.240.0"
+          },
+          {
+            "key": "D",
+            "text": "255.255.254.0"
+          },
+          {
+            "key": "E",
+            "text": "255.255.224.0"
+          },
+          {
+            "key": "F",
+            "text": "255.255.128.0"
+          },
+          {
+            "key": "G",
+            "text": "255.255.192.0"
+          },
+          {
+            "key": "H",
+            "text": "255.255.255.0"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 19,
+        "week": 7,
+        "question": "Giao thức TCP đảm bảo truyền tin cậy bằng cách nào?,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "Thiết lập kết nối trước khi gửi nhận dữ liệu"
+          },
+          {
+            "key": "B",
+            "text": "Điều chỉnh tốc độ gửi dữ liệu bằng cách thay đổi kích thước cửa sổ gửi để không làm tắc nghẽn mạng"
+          },
+          {
+            "key": "C",
+            "text": "Sử dụng dịch vụ truyền tin cậy của tầng mạng"
+          },
+          {
+            "key": "D",
+            "text": "Dựa trên cơ chế biên nhận (Acknowlegement - ACK) khi nhận gói tin và gửi lại gói tin nếu bên gửi,không nhận được biên nhận đúng (ACK message)"
+          }
+        ],
+        "answer": [
+          "D"
+        ],
+        "multi": false
+      },
+      {
+        "id": 2,
+        "week": 7,
+        "question": "Đâu là các subnet mask hợp lệ,Select one or more:,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "255.255.128.0"
+          },
+          {
+            "key": "B",
+            "text": "255.255.208.0"
+          },
+          {
+            "key": "C",
+            "text": "255.255.240.0"
+          },
+          {
+            "key": "D",
+            "text": "255.255.250.0"
+          },
+          {
+            "key": "E",
+            "text": "255.255.16.0"
+          },
+          {
+            "key": "F",
+            "text": "255.255.190.0"
+          },
+          {
+            "key": "G",
+            "text": "255.255.32.0"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 4,
+        "week": 7,
+        "question": "Cho mạng LAN như hình dưới.",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "C",
+            "text": "D là tên máy và cũng là địa chỉ MAC của chúng.,S1,S2,3,3,Layer 2,Layer 2,1,1,2,2,A,B,C,D,Ban đầu switching table của S1 và S2 đều rỗng. Sau khi A gửi một frame cho"
+          }
+        ],
+        "answer": [],
+        "multi": false
+      },
+      {
+        "id": 7,
+        "week": 7,
+        "question": "Cho địa chỉ của một subnet là 112.137.208.0.,Các prefix length hoặc subnet mask nào dưới đây là hợp lệ,Select one or more:,✓,",
+        "explanation": "are: prefix length = 20, prefix length = 21, netmask = 255.",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "netmask = 255.255.248.0"
+          },
+          {
+            "key": "B",
+            "text": "prefix length = 18,✓"
+          },
+          {
+            "key": "C",
+            "text": "prefix length = 21"
+          },
+          {
+            "key": "D",
+            "text": "netmask = 255.255.192.0"
+          },
+          {
+            "key": "E",
+            "text": "netmask = 255.255.224.0"
+          },
+          {
+            "key": "F",
+            "text": "netmask = 255.255.240.0,✓"
+          },
+          {
+            "key": "G",
+            "text": "prefix length = 19,✓"
+          },
+          {
+            "key": "H",
+            "text": "prefix length = 20,I. netmask = 255.255.128.0"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 8,
+        "week": 7,
+        "question": "một phần,Đâu KHÔNG là các địa chỉ IP public,Select one or more:,",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "2.2.2.2"
+          },
+          {
+            "key": "B",
+            "text": "172.1.1.1"
+          },
+          {
+            "key": "C",
+            "text": "169.254.0.1,✓"
+          },
+          {
+            "key": "D",
+            "text": "10.10.10.10"
+          },
+          {
+            "key": "E",
+            "text": "192.167.1.1,✗"
+          },
+          {
+            "key": "F",
+            "text": "8.8.8.8"
+          },
+          {
+            "key": "G",
+            "text": "169.255.0.1"
+          },
+          {
+            "key": "H",
+            "text": "169.256.0.1,I. 192.168.1.1,✓,J. 172.17.1.1,✓,K. 1.1.1.1,L. 169.253.0.1,M. 192.169.1.1,✗,✗,N. 172.15.1.1"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 9,
+        "week": 7,
+        "question": "Có một kết nối TCP giữa",
+        "explanation": "",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "Máy tính B,Seq=120, 100 byte data,ACK= 1,Seq= 2 , 120 byte data,Seq= 3 , 50 byte data,t,Answer:,270"
+          }
+        ],
+        "answer": [],
+        "multi": false
+      },
+      {
+        "id": 10,
+        "week": 7,
+        "question": "Các phát biểu sau phát biểu nào đúng,Select one or more:,",
+        "explanation": "are: ARP là một giao thức hoạt động ở tầng Datalink, WiFi là một giao thức tiêu chuẩn,của tầng datalink, Cơ chế Aloha và Slotted Aloha có thể được sử dụng để giải quyết vấn đề truy cập kênh,,Tiêu chuẩn 802.",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "A",
+            "text": "Thông thường ngày nay, người ta không thực hiện tính năng truyền dữ liệu tin cậy ở tầng datalink nữa"
+          },
+          {
+            "key": "B",
+            "text": "Giao thức ARP được sử dụng để ánh xạ địa chỉ MAC vào địa chỉ IP"
+          },
+          {
+            "key": "C",
+            "text": "BGP là một giao thức hoạt động ở tầng Datalink"
+          },
+          {
+            "key": "D",
+            "text": "Phương pháp truy nhập kênh theo kiểu Random Access là hiệu quả hơn phương pháp Channel,Partitioning trong trường hợp số người dùng trong mạng là không xác định"
+          },
+          {
+            "key": "E",
+            "text": "Tính năng ở tầng datalink thường được thực hiện hoàn toàn bởi phần mềm và CPU của hệ thống"
+          },
+          {
+            "key": "F",
+            "text": "Phương pháp truy nhập kênh theo kiểu \"Random Access\" là hiệu quả hơn phương pháp \"Channel,Partitioning\" trong trường hợp cần đảm bảo tài nguyên bằng thông cho từng người dùng"
+          },
+          {
+            "key": "G",
+            "text": "Tiêu chuẩn 802.3 là tiêu chuẩn của mạng LAN"
+          }
+        ],
+        "answer": [],
+        "multi": true
+      },
+      {
+        "id": 12,
+        "week": 7,
+        "question": "một phần,Trễ lan truyền từ",
+        "explanation": "are: Nếu t < 100ns, B sẽ phát frame đi nhưng không thành công do bị xung đột,(Collision), Nếu t > 100ns và t < 900ns, B sẽ không phát frame do phát hiện kênh truyền đang bận, Nếu t >,900ns, B sẽ phát frame đi và sẽ thành công.",
+        "image_url": null,
+        "type": "mcq",
+        "subtype": "mcq",
+        "options": [
+          {
+            "key": "B",
+            "text": "có một frame muốn truyền. Giả sử rằng trên mạng chỉ có mỗi hai máy A và"
+          },
+          {
+            "key": "A",
+            "text": "Nếu t > 900ns, B sẽ phát frame đi và sẽ thành công"
+          },
+          {
+            "key": "C",
+            "text": "Nếu t < 100ns, B sẽ phát frame đi nhưng không thành công do bị xung đột (Collision)"
+          },
+          {
+            "key": "D",
+            "text": "Nếu t > 100ns và t < 900ns, B sẽ không phát frame do phát hiện kênh truyền đang bận"
+          }
+        ],
+        "answer": [
+          "B"
+        ],
+        "multi": false
+      }
+    ]
+  },
+  "week_info": {
+    "7": {
+      "label": "Tuần 7",
+      "desc": "Tầng vận chuyển – UDP & RDT",
+      "icon": "📦"
+    }
+  }
+};
+
+// CommonJS export (Node.js / seed.js)
+// if (typeof module !== 'undefined') module.exports = DATA;

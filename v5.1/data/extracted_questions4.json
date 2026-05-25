@@ -1,0 +1,424 @@
+[
+  {
+    "id": 15,
+    "week": 7,
+    "type": "mcq",
+    "question": "Xem xét các mục đích/mục tiêu/việc sử dụng các cơ chế giao thức truyền dữ liệu đáng tin cậy khác nhau.,Đối với mục đích/mục tiêu/cách sử dụng nhất định, hãy kết hợp nó với cơ chế RDT được sử dụng để triển,khai mục đích/mục tiêu/cách sử dụng nhất định.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "ACK"
+      },
+      {
+        "key": "B",
+        "text": "Retransmission"
+      },
+      {
+        "key": "C",
+        "text": "Checksum"
+      },
+      {
+        "key": "D",
+        "text": "Sequence numbers"
+      }
+    ],
+    "answer": [
+      "E"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 16,
+    "week": 7,
+    "type": "mcq",
+    "question": "Hãy xem xét người gửi và người nhận rdt 2.0 được hiển thị bên dưới, với các chuyển đổi FSM tại người gửi,được gắn nhãn S1, S2 và S3; và chuyển tiếp người nhận có nhãn R1 và R2.,S1,rdt_send(data),snkpkt = make_pkt(data, checksum),udt_send(sndpkt),rdt_rcv(rcvpkt) &&,Wait for,Wait for,isNAK(rcvpkt),sender,call from,ACK or,udt_send(sndpkt),above,NAK,S2,rdt_rcv(rcvpkt) && isACK(rcvpkt),S3,Λ,rdt_rcv(rcvpkt) && corrupt(rcvpkt),udt_send(NAK),R1,Wait for,call from,receiver,below,rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),R2,extract(rcvpkt,data),deliver_data(data),udt_send(ACK),Trình tự chuyển tiếp nào sau đây có thể xảy ra do lệnh gọi rdt_send() ban đầu của người gửi và có thể xảy,ra lỗi thư sau đó cũng như quá trình khôi phục lỗi sau đó.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "S1, S2, S3"
+      },
+      {
+        "key": "B",
+        "text": "S1, R1, S2, R2, S3"
+      },
+      {
+        "key": "C",
+        "text": "S1, R2, S2"
+      },
+      {
+        "key": "D",
+        "text": "S1, R2, S3"
+      },
+      {
+        "key": "E",
+        "text": "S1, R1, S3"
+      },
+      {
+        "key": "F",
+        "text": "S1, R1, S2, R1, S3"
+      },
+      {
+        "key": "G",
+        "text": "S1, R1, S2,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 17,
+    "week": 7,
+    "type": "mcq",
+    "question": "Hãy xem xét các FSM của người gửi và người nhận rdt2.1 được hiển thị bên dưới, với các chuyển tiếp được,gắn nhãn S1 đến S6 ở người gửi và chuyển tiếp từ R1 đến R6 ở người nhận. Người gửi và người nhận bắt,đầu ở trạng thái \"Chờ cuộc gọi 0 từ phía trên\" và \"Đợi cuộc gọi 0 từ bên dưới\".,rdt2.1,rdt_send(data),sndpkt = make_pkt(0, data, checksum),sender,S1,udt_send(sndpkt),rdt_rcv(rcvpkt) &&,Wait for,S2,call 0 from,isNAK(rcvpkt) ),udt_send(sndpkt),S6,rdt_rcv(rcvpkt),rdt_rcv(rcvpkt),&& notcorrupt(rcvpkt) &&,&& notcorrupt(rcvpkt),isACK(rcvpkt),&& isACK(rcvpkt),∧,∧,S3,Wait for,Wait for,S5,rdt_rcv(rcvpkt),call 1 from,&& (corrupt(rcvpkt) ||,NAK 1,above,isNAK(rcvpkt) ),rdt_send(data),S4,udt_send(sndpkt),sndpkt = make_pkt(1, data, checksum),udt_send(sndpkt),rdt2.1,rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),receiver,R1,extract(rcvpkt,data),R6,deliver_data(data),sndpkt = make_pkt(ACK, chksum),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),sndpkt = make_pkt(NAK, chksum),R2,sndpkt = make_pkt(NAK, chksum),udt_send(sndpkt),udt_send(sndpkt),Wait for,Wait for,rdt_rcv(rcvpkt) &&,rdt_rcv(rcvpkt) &&,not corrupt(rcvpkt) &&,not corrupt(rcvpkt) &&,has_seq0(rcvpkt),has_seq0(rcvpkt),sndpkt = make_pkt(ACK, chksum),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),udt_send(sndpkt),rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),R5,R4,extract(rcvpkt,data),deliver_data(data),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),Giả sử không có lỗi kênh nào xảy ra. Một chuỗi các chuyển đổi xen kẽ giữa người gửi và người nhận được,đưa ra dưới đây. Chuyển tiếp S1 và S4 đã được cung cấp.",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "S3"
+      },
+      {
+        "key": "B",
+        "text": "R1"
+      },
+      {
+        "key": "C",
+        "text": "R3"
+      },
+      {
+        "key": "D",
+        "text": "S2"
+      },
+      {
+        "key": "E",
+        "text": "S6"
+      },
+      {
+        "key": "F",
+        "text": "R4,x4,E,,x3,F,,x2,A,,x1,B,,,Your answer is correct"
+      }
+    ],
+    "answer": [
+      "E",
+      "F",
+      "A",
+      "B"
+    ],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 18,
+    "week": 7,
+    "type": "mcq",
+    "question": "Hãy xem xét các FSM của người gửi và người nhận rdt2.1 được hiển thị bên dưới, với các chuyển tiếp được,gắn nhãn S1 đến S6 ở người gửi và chuyển tiếp từ R1 đến R6 ở người nhận. Người gửi và người nhận bắt,đầu ở trạng thái \"Chờ cuộc gọi 0 từ phía trên\" và \"Đợi cuộc gọi 0 từ bên dưới\".,rdt2.1,rdt2.1,sender,sndpkt = make_pkt(0, data, checksum),S1,udt_send(sndpkt),rdt_rcv(rcvpkt) &&,Wait for,Wait for,S2,call 0 from,ACK or,isNAK(rcvpkt) ),udt_send(sndpkt),S6,rdt_rcv(rcvpkt),rdt_rcv(rcvpkt),&& notcorrupt(rcvpkt) &&,&& notcorrupt(rcvpkt),isACK(rcvpkt),&& isACK(rcvpkt),∧,∧,S3,Wait for,Wait for,S5,call 1 from,rdt_rcv(rcvpkt),ACK or,&& (corrupt(rcvpkt) ||,NAK 1,isNAK(rcvpkt) ),udt_send(sndpkt),sndpkt = make_pkt(1, data, checksum),S4,udt_send(sndpkt),rdt2.1,rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),receiver,R1,extract(rcvpkt,data),R6,deliver_data(data),sndpkt = make_pkt(ACK, chksum),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),udt_send(sndpkt),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),sndpkt = make_pkt(NAK, chksum),sndpkt = make_pkt(NAK, chksum),udt_send(sndpkt),udt_send(sndpkt),Wait for,Wait for,rdt_rcv(rcvpkt) &&,rdt_rcv(rcvpkt) &&,0 from,1 from,not corrupt(rcvpkt) &&,not corrupt(rcvpkt) &&,below,below,has_seq0(rcvpkt),has_seq0(rcvpkt),sndpkt = make_pkt(ACK, chksum),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),udt_send(sndpkt),rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),R5,R4,&& has_seq1(rcvpkt),extract(rcvpkt,data),deliver_data(data),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),Giả sử rằng việc truyền tin nhắn ban đầu của người gửi bị hỏng nhưng không có lần truyền tin nhắn nào,khác bị hỏng. Khớp các chuyển đổi không được gắn nhãn x1, x2, x3, x4, x5 theo trình tự chuyển đổi theo,thứ tự thời gian bên dưới (chuyển đổi người gửi và người nhận xen kẽ) sẽ xảy ra sau quá trình chuyển đổi,S1 ban đầu (bị hỏng), điều đó sẽ dẫn đến hai thông báo được được gửi đến người nhận, trong đó người gửi,và người nhận quay trở lại trạng thái ban đầu (do quá trình truyền tin nhắn ban đầu của người gửi bị hỏng).,=> S1 (message corrupted), x1, x2, x3, x4, S4, x5, S6.,ANSWER LIST:,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "S3"
+      },
+      {
+        "key": "B",
+        "text": "R6"
+      },
+      {
+        "key": "C",
+        "text": "R1"
+      },
+      {
+        "key": "D",
+        "text": "R3"
+      },
+      {
+        "key": "E",
+        "text": "R4, F.S2,G.S4,x5,E,,x4,A,,x2,F,,x3,C,,x1,B,,Your answer is correct"
+      }
+    ],
+    "answer": [
+      "E",
+      "A",
+      "F",
+      "C",
+      "B"
+    ],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 19,
+    "week": 7,
+    "type": "mcq",
+    "question": "Hãy xem xét các FSM của người gửi và người nhận rdt2.1 được hiển thị bên dưới, với các chuyến tiếp được,gắn nhãn S1 đến S6 ở người gửi và chuyển tiếp từ R1 đến R6 ở người nhận. Người gửi và người nhận bắt,đầu ở trạng thái \"Chờ cuộc gọi 0 từ phía trên\" và \"Đợi cuộc gọi 0 từ bên dưới\".,rdt2.1,rdt_send(data),sndpkt = make_pkt(0, data, checksum),sender,S1,udt_send(sndpkt),rdt_rcv(rcvpkt) &&,Wait for,Wait for,S2,call 0 from,ACK or,udt_send(sndpkt),S6,rdt_rcv(rcvpkt),rdt_rcv(rcvpkt),&& notcorrupt(rcvpkt) &&,&& notcorrupt(rcvpkt),isACK(rcvpkt),&& isACK(rcvpkt),∧,∧,S3,S5,rdt_rcv(rcvpkt),Wait for,call 1 from,&& (corrupt(rcvpkt) ||,ACK or,NAK 1,above,rdt_send(data),udt_send(sndpkt),sndpkt = make_pkt(1, data, checksum),S4,udt_send(sndpkt),rdt2.1,rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),receiver,R1,extract(rcvpkt,data),R6,deliver_data(data),sndpkt = make_pkt(ACK, chksum),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),udt_send(sndpkt),rdt_rcv(rcvpkt) && (corrupt(rcvpkt),sndpkt = make_pkt(NAK, chksum),R2,sndpkt = make_pkt(NAK, chksum),udt_send(sndpkt),udt_send(sndpkt),Wait for,Wait for,rdt_rcv(rcvpkt) &&,rdt_rcv(rcvpkt) &&,not corrupt(rcvpkt) &&,not corrupt(rcvpkt) &&,below,below,R3,has_seq1(rcvpkt),has_seq0(rcvpkt),sndpkt = make_pkt(ACK, chksum),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),udt_send(sndpkt),rdt_rcv(rcvpkt) && notcorrupt(rcvpkt),R5,R4,&& has_seq1(rcvpkt),extract(rcvpkt,data),deliver_data(data),sndpkt = make_pkt(ACK, chksum),udt_send(sndpkt),Giả sử gói đầu tiên từ người gửi được nhận chính xác ở người nhận nhưng tin nhắn ACK được gửi từ người,nhận đến người gửi bị hỏng; tất cả các tin nhắn khác (trước hoặc sau ACK đó) đều được truyền đi mà,không gặp lỗi. Khớp các chuyến đổi không được gắn nhãn x1, x2, x3, x4, x5 theo trình tự chuyển tiếp theo,thứ tự thời gian bên dưới (các chuyến đổi xen kẽ giữa người gửi và người nhận) sẽ xảy ra sau quá trình,chuyển đổi S1 ban đầu, theo sau là quá trình truyền ACK bị hỏng, dẫn đến kết quả là trong một tin nhắn,được gửi đến người nhận, người gửi và người nhận sẽ quay lại trạng thái ban đầu. Lưu ý rằng một số,chuyển tiếp đã được cung cấp bên dưới.,=> S1, x1 (ACK corrupted), x2, x3, x4, S4, x5, S6.,ANSWER LIST:,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "S2"
+      },
+      {
+        "key": "B",
+        "text": "R3"
+      },
+      {
+        "key": "C",
+        "text": "R4"
+      },
+      {
+        "key": "D",
+        "text": "S3, E.R2,F.R1,x1,F,,x3,B,,x5,C,,x4,D,,x2,A,,Your answer is correct"
+      }
+    ],
+    "answer": [
+      "F"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 20,
+    "week": 7,
+    "type": "mcq",
+    "question": "What is meant by a cumulative acknowledgment, ACK(n)?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "A cumulative ACK(n) allows the receiver to let the sender know that it has not yet received an ACK for packet,with sequence number n"
+      },
+      {
+        "key": "B",
+        "text": "A cumulative ACK(n) acks all packets with a sequence number up to and including n as being received"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "A cumulative ACK(n) acks all packets with a sequence number up to and including n as being received."
+  },
+  {
+    "id": 6,
+    "week": 7,
+    "type": "mcq",
+    "question": "Trường nào dưới đây nằm trong tiêu đề phân đoạn UDP?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Source IP address"
+      },
+      {
+        "key": "B",
+        "text": "Internet checksum"
+      },
+      {
+        "key": "C",
+        "text": "Destination port number"
+      },
+      {
+        "key": "D",
+        "text": "Length (of UDP header plus payload)"
+      },
+      {
+        "key": "E",
+        "text": "Sequence number"
+      },
+      {
+        "key": "F",
+        "text": "Upper layer protocol"
+      },
+      {
+        "key": "G",
+        "text": "Data (payload)"
+      },
+      {
+        "key": "H",
+        "text": "Source port number,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 7,
+    "week": 7,
+    "type": "mcq",
+    "question": "Why is the UDP header length field needed?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Because the payload section can be of variable length, and this lets UDP know where the segment ends"
+      },
+      {
+        "key": "B",
+        "text": "Because this field is needed in TCP as well"
+      },
+      {
+        "key": "C",
+        "text": "To make the header and even number of bytes and Because this field is needed in TCP as well"
+      },
+      {
+        "key": "D",
+        "text": "To make the header and even number of bytes,Your answer is correct.,Câu trả lời đúng là:,Because the payload section can be of variable length, and this lets UDP know where the segment ends"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Because the payload section can be of variable length, and this lets UDP know where the segment ends."
+  },
+  {
+    "id": 8,
+    "week": 7,
+    "type": "mcq",
+    "question": "Over what set of bytes is the checksum field in the UDP header computed over?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "The entire UDP segment, except the checksum field itself"
+      },
+      {
+        "key": "B",
+        "text": "Just the UDP header but not the payload"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 9,
+    "week": 7,
+    "type": "mcq",
+    "question": "Phát biểu nào sau đây đúng về checksum?,✓",
+    "image": null,
+    "options": [
+      {
+        "key": "C",
+        "text": "checksum được tính toán ở người gửi bằng cách coi mỗi byte trong gói là một số, sau đó cộng các số này,✓,(mỗi số đại diện cho một byte) lại với nhau để tính tổng (được gọi là checksum).,✓"
+      },
+      {
+        "key": "D",
+        "text": "Giá trị checksum do người gửi tính toán thường được bao gồm trường checksum và tiêu đề gói.,✓,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": "are:,Người nhận gói có trường checksum sẽ cộng các byte nhận được, giống như người gửi đã làm và so sánh,checksum được tính toán cục bộ này với giá trị checksum trong tiêu đề gói."
+  },
+  {
+    "id": 10,
+    "week": 7,
+    "type": "mcq",
+    "question": "Tính giá trị Internet checksum cho hai từ 16 bit này: 11110101 11010011 và 10110011 01000100,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "01010110 11101000"
+      },
+      {
+        "key": "B",
+        "text": "01010110 11100111"
+      },
+      {
+        "key": "C",
+        "text": "01101110 11010101"
+      },
+      {
+        "key": "D",
+        "text": "01011110 11000101,Your answer is correct.,Câu trả lời đúng là:,01010110 11100111"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 11,
+    "week": 7,
+    "type": "mcq",
+    "question": "Tính giá trị Internet checksum cho hai từ 16 bit này: 01000001 11000100 và 00100000 00101011,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "01101110 11010101"
+      },
+      {
+        "key": "B",
+        "text": "10011110 00010001"
+      },
+      {
+        "key": "C",
+        "text": "10011110 00010000"
+      },
+      {
+        "key": "D",
+        "text": "10011110 00001111,Your answer is correct.,Câu trả lời đúng là:,10011110 00010000"
+      }
+    ],
+    "answer": [
+      "C"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 14,
+    "week": 7,
+    "type": "mcq",
+    "question": "một phần,Giả sử một phân đoạn UDP (",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "24"
+      },
+      {
+        "key": "B",
+        "text": "3546"
+      },
+      {
+        "key": "C",
+        "text": "60.54.75.24"
+      },
+      {
+        "key": "D",
+        "text": "80"
+      },
+      {
+        "key": "E",
+        "text": "10.0.0.1"
+      },
+      {
+        "key": "F",
+        "text": "4829"
+      },
+      {
+        "key": "G",
+        "text": "Số cổng đích của phân đoạn UDP (B) được gửi trả lời là:,F,Số cổng nguồn của phân đoạn UDP (B) được gửi trong phần lời là:"
+      }
+    ],
+    "answer": [
+      "C",
+      "F",
+      "B",
+      "G"
+    ],
+    "multi": true,
+    "explanation": ""
+  }
+]

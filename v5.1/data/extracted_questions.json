@@ -1,0 +1,460 @@
+[
+  {
+    "id": 11,
+    "week": 7,
+    "type": "matching",
+    "question": "Ghép định nghĩa/chức năng của một thành phần hoặc phương pháp tiếp cận trong hệ thống video phát,trực tuyến được nối mạng với tên của nó.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Over The Top (OTT)"
+      },
+      {
+        "key": "B",
+        "text": "Enter deep"
+      },
+      {
+        "key": "C",
+        "text": "Chunk"
+      },
+      {
+        "key": "D",
+        "text": "DASHE"
+      },
+      {
+        "key": "E",
+        "text": "Video frame"
+      }
+    ],
+    "answer": {
+      "Phương pháp CDN lưu trữ nội dung trong các mạng truy cập, gần với máy khách": "B",
+      "Một cách tiếp cận cho phép khách hàng điều chỉnh tốc độ mã hóa của video được truy xuất theo điều kiện,tắc nghẽn mạng": "D",
+      "Một đơn vị video, mỗi video có thể được mã hóa ở nhiều tốc độ khác nhau, được lưu trữ trong các tệp khác,nhau": "C",
+      "Tệp chứa vị trí và tốc độ mã hóa của tệp tương ứng với các phân đoạn trong video": "F"
+    },
+    "multi": true,
+    "explanation": "s:,Phương pháp CDN lưu trữ nội dung trong các mạng truy cập, gần với máy khách."
+  },
+  {
+    "id": 12,
+    "week": 7,
+    "type": "mcq",
+    "question": "Trong DASH (Truyền phát động, thích ứng qua HTTP), server chia tệp video thành các phần ... ?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "được tải xuống ngay trước thời gian phát của chúng. Phân đoạn được sử dụng chủ yếu vì người xem có,thể nhảy xung quanh (ví dụ: tua đi nhanh) trong video"
+      },
+      {
+        "key": "B",
+        "text": "đang tải xuống đoạn nhỏ nhất trước tiên để tối đa hóa số lượng đoạn nhận được"
+      },
+      {
+        "key": "C",
+        "text": "cho phép người dùng trả phí tránh xem những đoạn có chứa quảng cáo"
+      },
+      {
+        "key": "D",
+        "text": "được lưu trữ, mỗi mã được mã hóa ở nhiều tốc độ (chất lượng video). Client phát từng đoạn video,,với mỗi đoạn được yêu cầu ở tốc độ mã hóa phù hợp với băng thông có sẵn tại thời điểm đó"
+      }
+    ],
+    "answer": [
+      "D"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 13,
+    "week": 7,
+    "type": "mcq",
+    "question": "Làm thế nào để ứng dụng nối mạng chạy trên server biết địa chỉ IP của client và số công để phản hồi lại,gói dữ liệu đã nhận?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Mã ứng dụng tại máy chủ xác định địa chỉ IP của máy khách và số công từ phân đoạn ban đầu được máy,khách gửi và phải chỉ định rõ ràng các giá trị này khi gửi trở lại ổ cắm đến máy khách đó"
+      },
+      {
+        "key": "C",
+        "text": "Máy chủ sẽ biết số công đang được máy khách sử dụng vì tất cả các dịch vụ đều có một số công phổ,biến"
+      },
+      {
+        "key": "D",
+        "text": "Máy chủ sẽ truy vấn DNS để tìm hiểu địa chỉ IP của máy khách"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Mã ứng dụng tại máy chủ xác định địa chỉ IP của máy khách và số công từ phân đoạn ban đầu được máy,khách gửi và phải chỉ định rõ ràng các giá trị này khi gửi trở lại ổ cắm đến máy khách đó."
+  },
+  {
+    "id": 15,
+    "week": 7,
+    "type": "mcq",
+    "question": "Điều gì xảy ra khi socket connect() được gọi?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Điều này khiến client liên hệ với TCP server để thiết lập kết nối giữa client đó và server. Nếu đã có một,hoặc nhiều server trên kết nối này thì server mới này cũng sẽ được thêm vào kết nối này"
+      },
+      {
+        "key": "B",
+        "text": "Điều này khiến server liên hệ với TCP client để thiết lập kết nối giữa client đó và server"
+      },
+      {
+        "key": "C",
+        "text": "Quy trình này tạo một socket mới ở client và kết nối socket đó với server được chỉ định"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Điều này khiến client liên hệ với TCP server để thiết lập kết nối giữa client đó và server."
+  },
+  {
+    "id": 16,
+    "week": 7,
+    "type": "mcq",
+    "question": "Chức năng của lớp vận chuyển được triển khai chủ yếu ở đâu?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Các chức năng của lớp vận chuyển được triển khai chủ yếu tại các máy chủ ở \"biên\" của mạng"
+      },
+      {
+        "key": "B",
+        "text": "Các chức năng của lớp vận chuyển được triển khai chủ yếu tại các bộ định tuyến và chuyển mạch trong,mạng"
+      },
+      {
+        "key": "C",
+        "text": "Các chức năng của lớp vận chuyển được triển khai chủ yếu ở mỗi đầu của liên kết vật lý kết nối một máy,chủ/bộ định tuyến/bộ chuyển mạch với một máy chủ/bộ định tuyến/bộ chuyển mạch khác"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Các chức năng của lớp vận chuyển được triển khai chủ yếu tại các máy chủ ở \"biên\" của mạng."
+  },
+  {
+    "id": 19,
+    "week": 7,
+    "type": "mcq",
+    "question": "Lớp vận chuyển nằm trên lớp mạng và cung cấp các dịch vụ của nó bằng cách sử dụng các dịch vụ do,lớp mạng cung cấp. Vì vậy, điều quan trọng là chúng ta phải biết dịch vụ phân phối \"best-effort\" của lớp,mạng có nghĩa là gì. Đúng hay sai?,Dịch vụ phân phối best-effort của lớp mạng có nghĩa là IP tạo ra \"best-effort\" để phân phối các phân,đoạn giữa các communicating hosts nhưng không đảm bảo. Đặc biệt, nó không đảm bảo việc phân,phối phân đoạn, không đảm bảo phân phối các phân đoạn một cách có trật tự và không đảm bảo tính,toàn vẹn của dữ liệu trong các phân đoạn.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Sai"
+      },
+      {
+        "key": "B",
+        "text": "Đúng"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 20,
+    "week": 7,
+    "type": "matching",
+    "question": "Ý nghĩa của việc phân kênh lớp vận chuyển là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Nhận phân đoạn lớp vận chuyển từ lớp mạng, trích xuất payload, xác định địa chỉ IP đích cho dữ liệu, sau,đó chuyển phân đoạn và địa chỉ IP trở lại lớp mạng"
+      },
+      {
+        "key": "B",
+        "text": "Lấy dữ liệu từ một socket (có thể là một trong nhiều socket), đóng gói dữ liệu chuck với thông tin tiêu đề,từ đó tạo ra một phân đoạn lớp vận chuyển và cuối cùng chuyển phân đoạn này đến lớp mạng"
+      },
+      {
+        "key": "D",
+        "text": "Nhận phân đoạn lớp vận chuyển từ lớp mạng, trích xuất payload (dữ liệu) và phân phối dữ liệu đến,đúng socket"
+      }
+    ],
+    "answer": {},
+    "multi": false,
+    "explanation": "Nhận phân đoạn lớp vận chuyển từ lớp mạng, trích xuất payload (dữ liệu) và phân phối dữ liệu đến đúng,socket."
+  },
+  {
+    "id": 1,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử một khách hàng đang gửi HTTP GET message đến web server: gaia.cs.umass.edu. Giả sử HTTP,GET message từ máy client đến server như sau:,GET /kurose_ross_sandbox/interactive/quotation2.htm HTTP/1.1,Host: gaia.cs.umass.edu,Accept: text/plain, text/html, text/xml, image/jpeg, image/gif, audio/mpeg, audio/mp4, video/wmv,,video/mp4,,Accept-Language: en-us, en-gb;q=0.1, en;q=0.7, fr, fr-ch, da, de, fi,If-Modified-Since: Wed, 09 Sep 2020 16:06:01 -0700,User Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11 (KHTML, like Gecko),Chrome/17.0.963.56 Safari/535.11,Client có bản sao được lưu trong bộ nhớ đệm của đối tượng được yêu cầu không?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Có, bởi vì đây là GET có điều kiện"
+      },
+      {
+        "key": "B",
+        "text": "Không, vì client sẽ không yêu cầu một đối tượng nếu nó được lưu vào bộ nhớ đệm"
+      },
+      {
+        "key": "C",
+        "text": "Không có đủ thông tin để trả lời câu hỏi này"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Có, bởi vì đây là GET có điều kiện."
+  },
+  {
+    "id": 2,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử HTTP server gửi thông báo phản hồi HTTP sau cho client như sau:,HTTP/1.0 200 OK,Date: Wed, 09 Sep 2020 23:46:21 +0000,Server: Apache/2.2.3 (CentOS),Last-Modified: Wed, 09 Sep 2020 23:51:41 +0000,ETag:17dc6-a5c-bf716880.,Content-Length: 418,Connection: Close,Content-type: image/html,Web server có đóng kết nối TCP sau khi gửi tin nhắn này không?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Không có đủ thông tin để trả lời câu hỏi này"
+      },
+      {
+        "key": "B",
+        "text": "Không, đây là kết nối liên tục và do đó máy chủ sẽ duy trì kết nối TCP mở"
+      },
+      {
+        "key": "C",
+        "text": "Có, vì đây là HTTP 1.0"
+      }
+    ],
+    "answer": [
+      "C"
+    ],
+    "multi": false,
+    "explanation": "Có, vì đây là HTTP 1."
+  },
+  {
+    "id": 3,
+    "week": 7,
+    "type": "mcq",
+    "question": "Có bao nhiêu RTT từ khi client liên hệ lần đầu với email server (bằng cách bắt đầu TCP session) cho,đến khi client có thể bắt đầu gửi chính email đó – tức là tuân theo tất cả bắt tay TCP hoặc SMTP ban,đầu được yêu cầu?,\"client\",\"server\",SMTP server,SMTP server,initiate TCP,connection,RTT,TCP connection,initiated,220,SMTP,HELO,handshaking,250 Hello,SMTP,transfers,time,",
+    "image": null,
+    "options": [
+      {
+        "key": "E",
+        "text": "2.5"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": "3,\n\n================================================================================\nIMAGE: bai-tap-online-tuan-4-5-mang-may-tinh-2324ii-int2213-24_40-56_5."
+  },
+  {
+    "id": 4,
+    "week": 7,
+    "type": "matching",
+    "question": "Hãy ghép chức năng của giao thức với tên của giao thức email (nếu có) triển khai chức năng đó.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "SMTP"
+      },
+      {
+        "key": "B",
+        "text": "Cả SMTP và IMAP đều không thực hiện điều này"
+      },
+      {
+        "key": "C",
+        "text": "IMAP,Đẩy email từ mail client đến mail server.,A,,Kéo thư từ mail server này sang mail server khác.,B,,Kéo email đến mail client từ mail server.,C"
+      }
+    ],
+    "answer": {
+      "Đẩy email từ mail client đến mail server": "A",
+      "Kéo thư từ mail server này sang mail server khác": "B",
+      "Kéo email đến mail client từ mail server": "C"
+    },
+    "multi": false,
+    "explanation": "s:,Đẩy email từ mail client đến mail server."
+  },
+  {
+    "id": 5,
+    "week": 7,
+    "type": "matching",
+    "question": "Ghép các chức năng của server với một loại DNS server nhất định trong hệ thống phân cấp DNS server.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "DNS root servers"
+      },
+      {
+        "key": "B",
+        "text": "Authoritative DNS server"
+      },
+      {
+        "key": "C",
+        "text": "Local DNS server"
+      }
+    ],
+    "answer": {
+      "Trả lời truy vấn DNS bằng local host, bằng cách liên hệ với các DNS server khác để trả lời truy vấn": "C",
+      "Chịu trách nhiệm về domain (ví dụ: *.com, *.edu); biết cách liên hệ với các name servers có thẩm quyền": "D",
+      "Cấp cao nhất của hệ thống phân cấp DNS, biết cách tiếp cận các server chịu trách nhiệm về một domain nhất,định (ví dụ: *.com, *.edu)": "A",
+      "Cung cấp authoritative hostname để ánh xạ IP cho các máy chủ được đặt tên của tổ chức": "B"
+    },
+    "multi": false,
+    "explanation": "s:,Trả lời truy vấn DNS bằng local host, bằng cách liên hệ với các DNS server khác để trả lời truy vấn."
+  },
+  {
+    "id": 6,
+    "week": 7,
+    "type": "mcq",
+    "question": "một phần,Giá trị của bộ nhớ đệm trong DNS name server cục bộ là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Việc bộ đệm DNS cung cấp quyền truy cập ưu tiên vào các root server, vì DNS request đến từ bộ nhớ đệm,cục bộ"
+      },
+      {
+        "key": "B",
+        "text": "Việc bộ đệm DNS cung cấp phản hồi nhanh hơn, nếu phản hồi cho truy vấn được tìm thấy trong bộ nhớ,đệm"
+      },
+      {
+        "key": "C",
+        "text": "Bộ đệm DNS dẫn đến tải ít hơn ở nơi khác trong DNS, khi phản hồi cho một truy vấn được tìm thấy,trong bộ nhớ đệm cục bộ"
+      },
+      {
+        "key": "D",
+        "text": "Việc bộ đệm DNS cung cấp khả năng phục vụ như một authoritative name server cho nhiều tổ chức"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": "are:,Bộ đệm DNS dẫn đến tải ít hơn ở nơi khác trong DNS, khi phản hồi cho một truy vấn được tìm thấy trong bộ,nhớ đệm cục bộ."
+  },
+  {
+    "id": 7,
+    "week": 7,
+    "type": "mcq",
+    "question": "Bản ghi tài nguyên loại \"A\" chứa thông tin gì trong cơ sở dữ liệu DNS?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Tên bí danh và tên thật của máy chủ"
+      },
+      {
+        "key": "B",
+        "text": "Tên miền và tên của máy chủ định danh có thẩm quyền cho miền đó"
+      },
+      {
+        "key": "C",
+        "text": "Tên và tên của máy chủ SMTP được liên kết với tên đó"
+      },
+      {
+        "key": "D",
+        "text": "Tên máy chủ và địa chỉ IP"
+      }
+    ],
+    "answer": [
+      "D"
+    ],
+    "multi": false,
+    "explanation": "Tên máy chủ và địa chỉ IP."
+  },
+  {
+    "id": 8,
+    "week": 7,
+    "type": "mcq",
+    "question": "Trong bộ nhớ đệm của HTTP web browser, bộ nhớ đệm của HTTP local web server và trong bộ nhớ đệm,local DNS, người dùng sẽ được hưởng lợi (ví dụ: độ trễ ngắn hơn trong trường hợp không có bộ nhớ,đệm) khi tìm thấy bản sao cục bộ/gần đó của một mục được yêu cầu. Trong hình thức bộ đệm nào sau,đây, người dùng được hưởng lợi không chỉ từ các yêu cầu gần đây của chính họ (và các câu trả lời được,lưu trong bộ nhớ đệm) mà còn từ các yêu cầu gần đây được thực hiện từ những người dùng khác?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "HTTP browser caching"
+      },
+      {
+        "key": "B",
+        "text": "HTTP local web caching"
+      },
+      {
+        "key": "C",
+        "text": "Local DNS server caching"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 9,
+    "week": 7,
+    "type": "mcq",
+    "question": "Mục đích của Manifest file trong cài đặt truyền phát đa phương tiện là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Để cho phép client dự trữ băng thông dọc theo đường dẫn từ server đến client đó, và để clientcó thể xem,video phát trực tuyến mà không bị suy giảm"
+      },
+      {
+        "key": "B",
+        "text": "Cho phép dịch vụ video ghi nhật ký video và server mà client truyền phát video từ đó"
+      },
+      {
+        "key": "C",
+        "text": "Để cho client biết nơi có thể truy xuất các phân đoạn video khác nhau, được mã hóa ở các tốc độ,khác nhau"
+      },
+      {
+        "key": "D",
+        "text": "Để cho video server OTT (Over-the-top) biết video mà client muốn xem"
+      }
+    ],
+    "answer": [
+      "C"
+    ],
+    "multi": false,
+    "explanation": "Để cho client biết nơi có thể truy xuất các phân đoạn video khác nhau, được mã hóa ở các tốc độ khác nhau."
+  },
+  {
+    "id": 10,
+    "week": 7,
+    "type": "mcq",
+    "question": "CDN áp dụng cách tiếp cận nào để truyền phát nội dung tới đồng thời hàng trăm nghìn người dùng?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Phục vụ video từ một \"mega-server\" trung tâm duy nhất với kết nối mạng tốc độ cực cao và bộ lưu trữ tốc,độ cao"
+      },
+      {
+        "key": "B",
+        "text": "Lưu trữ/phân phối nhiều bản sao video tại nhiều trang web được phân bổ theo địa lý"
+      },
+      {
+        "key": "C",
+        "text": "Cho phép các thiết bị khách gửi nội dung được yêu cầu cho nhau để giảm tải cơ sở hạ tầng CDN"
+      },
+      {
+        "key": "D",
+        "text": "Chủ động đẩy video tới thiết bị khách trước khi chúng được yêu cầu, sử dụng công nghệ học máy để dự,đoán các video được yêu cầu"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": "Lưu trữ/phân phối nhiều bản sao video tại nhiều trang web được phân bổ theo địa lý."
+  }
+]

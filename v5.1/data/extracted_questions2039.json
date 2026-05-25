@@ -1,0 +1,614 @@
+[
+  {
+    "id": 10,
+    "week": 7,
+    "type": "mcq",
+    "question": "HTTP cookie được sử dụng để làm gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Cookie là một mã được sever sử dụng, được thực hiện theo yêu cầu HTTP của client, để truy cập thông tin,mà server đã lưu trữ trước đó về tương tác trước đó với client này"
+      },
+      {
+        "key": "B",
+        "text": "Cookie là một mã được server sử dụng, được thực hiện theo yêu cầu HTTP của client, để truy cập thông,tin mà server đã lưu trữ trước đó về tương tác trước đó với trình duyệt Web này"
+      },
+      {
+        "key": "C",
+        "text": "Giống như món tráng miệng, bánh quy được sử dụng khi kết thúc giao dịch, để biểu thị sự kết thúc của giao,dịch"
+      },
+      {
+        "key": "D",
+        "text": "Cookie được sử dụng để giả mạo danh tính client với HTTP server"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": "Cookie là một mã được server sử dụng, được thực hiện theo yêu cầu HTTP của client, để truy cập thông tin mà,server đã lưu trữ trước đó về tương tác trước đó với trình duyệt Web này."
+  },
+  {
+    "id": 11,
+    "week": 7,
+    "type": "mcq",
+    "question": "Mục đích của HTTP GET message là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "HTTP GET request message được web client sử dụng để yêu cầu web server gửi đối tượng được yêu cầu,từ server đến client"
+      },
+      {
+        "key": "B",
+        "text": "HTTP GET request message được web server gửi đến web client để nhận yêu cầu tiếp theo từ web server"
+      },
+      {
+        "key": "C",
+        "text": "HTTP GET request message được web server gửi đến web client để lấy danh tính của web client"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "HTTP GET request message được web client sử dụng để yêu cầu web server gửi đối tượng được yêu cầu từ,server đến client."
+  },
+  {
+    "id": 12,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử một client đang gửi HTTP GET request message đến web server: gaia.cs.umass.edu. Giả sử,message HTTP GET từ máy khách đến máy chủ như sau:,GET /kurose_ross_sandbox/interactive/quotation2.htm HTTP/1.1,Host: gaia.cs.umass.edu,Accept: text/plain, text/html, text/xml, image/jpeg, image/gif, audio/mpeg, audio/mp4, video/wmv,,video/mp4,,Accept-Language: en-us, en-gb;q=0.1, en;q=0.7, fr, fr-ch, da, de, fi,If-Modified-Since: Wed, 09 Sep 2020 16:06:01 -0700,User Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11 (KHTML, like Gecko),Chrome/17.0.963.56 Safari/535.11,Client đang sử dụng phiên bản HTTP nào?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "2.1"
+      },
+      {
+        "key": "B",
+        "text": "1.1"
+      },
+      {
+        "key": "D",
+        "text": "1,Your answer is correct.,Câu trả lời đúng là:,1.1"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": ""
+  },
+  {
+    "id": 13,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử một máy client gửi HTTP GET request message đến web server: gaia.cs.umass.edu. HTTP GET,message từ máy khách đến máy chủ như sau:,GET /kurose_ross_sandbox/interactive/quotation2.htm HTTP/1.1,Host: gaia.cs.umass.edu,Accept: text/plain, text/html, text/xml, image/jpeg, image/gif, audio/mpeg, audio/mp4, video/wmv,,video/mp4,,Accept-Language: en-us, en-gb;q=0.1, en;q=0.7, fr, fr-ch, da, de, fi,If-Modified-Since: Wed, 09 Sep 2020 16:06:01 -0700,User Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11 (KHTML, like Gecko),Chrome/17.0.963.56 Safari/535.11,Ngôn ngữ nào mà client ít muốn nhận được phản hồi nhất?,◯",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Mandarin,◯"
+      },
+      {
+        "key": "B",
+        "text": "French,◯"
+      },
+      {
+        "key": "C",
+        "text": "United Kingdom English,◯"
+      },
+      {
+        "key": "D",
+        "text": "Farsi,◯"
+      },
+      {
+        "key": "E",
+        "text": "Finnish,◯"
+      },
+      {
+        "key": "F",
+        "text": "US English,Your answer is correct.,Câu trả lời đúng là:,United Kingdom English,studeersnel"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 14,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử một máy client gửi HTTP GET request message đến web server: gaia.cs.umass.edu. HTTP GET,message từ máy khách đến máy chủ như sau:,GET /kurose_ross_sandbox/interactive/quotation2.htm HTTP/1.1,Host: gaia.cs.umass.edu,Accept: text/plain, text/html, text/xml, image/jpeg, image/gif, audio/mpeg, audio/mp4, video/wmv,,video/mp4,,Accept-Language: en-us, en-gb;q=0.1, en;q=0.7, fr, fr-ch, da, de, fi,If-Modified-Since: Wed, 09 Sep 2020 16:06:01 -0700,User Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/535.11 (KHTML, like Gecko),Chrome/17.0.963.56 Safari/535.11,client có bản sao được lưu trong bộ nhớ đệm của đối tượng được yêu cầu không?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Không, bởi vì client sẽ không yêu cầu một đối tượng nếu nó có đối tượng đó trong bộ đệm của nó"
+      },
+      {
+        "key": "B",
+        "text": "Có, bởi vì đây là GET có điều kiện, được chứng minh bằng trường If-Modified-Since"
+      },
+      {
+        "key": "C",
+        "text": "Có, vì HTTP 1.1 đang được sử dụng"
+      },
+      {
+        "key": "D",
+        "text": "Không có đủ thông tin trong tiêu đề để trả lời câu hỏi này.,Your answer is correct.,Câu trả lời đúng là:,Có, bởi vì đây là GET có điều kiện, được chứng minh bằng trường If-Modified-Since"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": "Có, bởi vì đây là GET có điều kiện, được chứng minh bằng trường If-Modified-Since."
+  },
+  {
+    "id": 15,
+    "week": 7,
+    "type": "mcq",
+    "question": "Giả sử bây giờ server gửi HTTP response message cho client:,HTTP/1.0 200 OK,Date: Wed, 09 Sep 2020 23:46:21 +0000,Server: Apache/2.2.3 (CentOS),Last-Modified: Wed, 09 Sep 2020 23:51:41 +0000,ETag:17dc6-a5c-bf716880.,Content-Length: 418,Connection: Close,Content-type: image/html,web server có đóng kết nối TCP sau khi gửi message này không?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Không có đủ thông tin trong response message để trả lời câu hỏi này"
+      },
+      {
+        "key": "B",
+        "text": "Có, server sẽ đóng kết nối này vì phiên bản 1.0 của HTTP đang được sử dụng và các kết nối TCP không,được mở liên tục"
+      },
+      {
+        "key": "C",
+        "text": "Không, server sẽ để kết nối mở dưới dạng kết nối HTTP liên tục"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": "Có, server sẽ đóng kết nối này vì phiên bản 1."
+  },
+  {
+    "id": 16,
+    "week": 7,
+    "type": "mcq",
+    "question": "Điều nào sau đây là lợi ích của việc sử dụng bộ đệm web?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Nhìn chung, bộ nhớ đệm yêu cầu ít devices/hosts hơn để đáp ứng yêu cầu web, do đó tiết kiệm chi phí,server/cache"
+      },
+      {
+        "key": "B",
+        "text": "Bộ nhớ đệm cho phép server gốc theo dõi cẩn thận hơn những client nào đang yêu cầu và nhận những đối,tượng web nào"
+      },
+      {
+        "key": "C",
+        "text": "Bộ nhớ đệm sử dụng ít băng thông hơn khi đi vào mạng tổ chức nơi đặt client, nếu bộ nhớ đệm cũng nằm,trong mạng tổ chức đó"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": "are:,Bộ nhớ đệm sử dụng ít băng thông hơn khi đi vào mạng tổ chức nơi đặt client, nếu bộ nhớ đệm cũng nằm trong,mạng tổ chức đó."
+  },
+  {
+    "id": 17,
+    "week": 7,
+    "type": "mcq",
+    "question": "Điều nào sau đây là những thay đổi giữa HTTP 1.1 và HTTP/2?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "HTTP/2 cho phép các đối tượng trong kết nối liên tục được gửi theo thứ tự ưu tiên do client chỉ định"
+      },
+      {
+        "key": "B",
+        "text": "HTTP/2 cung cấp bảo mật nâng cao bằng cách sử dụng bảo mật lớp vận chuyển (TLS)"
+      },
+      {
+        "key": "D",
+        "text": "HTTP/2 có nhiều phương thức HTTP và mã trạng thái mới.,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": false,
+    "explanation": "are:,HTTP/2 cho phép chia một đối tượng lớn thành các phần nhỏ hơn và việc truyền các phần đó được xen kẽ với,việc truyền các đối tượng nhỏ hơn khác, do đó ngăn cản một đối tượng lớn buộc nhiều đối tượng nhỏ hơn phải,đợi đến lượt chúng được truyền."
+  },
+  {
+    "id": 18,
+    "week": 7,
+    "type": "mcq",
+    "question": "Thông tin nào sau đây sẽ xuất hiện trong tin nhắn trả lời application-level HTTP của máy chủ?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Tên của Web server (ví dụ: gaia.cs.umass.edu)"
+      },
+      {
+        "key": "B",
+        "text": "Mã phản hồi"
+      },
+      {
+        "key": "C",
+        "text": "sequence number"
+      },
+      {
+        "key": "D",
+        "text": "checksum"
+      },
+      {
+        "key": "E",
+        "text": "Cụm từ phản hồi liên quan đến mã phản hồi"
+      },
+      {
+        "key": "F",
+        "text": "Địa chỉ IP của server,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 19,
+    "week": 7,
+    "type": "mcq",
+    "question": "Mục đích của trường If-Modified-Since trong HTTP GET request message là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Để cho server biết rằng client đã lưu trữ đối tượng này từ GET trước đó và thời gian nó được lưu vào bộ,đệm"
+      },
+      {
+        "key": "B",
+        "text": "Để cho phép server thông báo cho client rằng nó nên lưu trữ đối tượng này"
+      },
+      {
+        "key": "C",
+        "text": "Để cho server biết rằng client muốn nhận đối tượng này và time until sẽ lưu đối tượng được trả về vào bộ,đệm của trình duyệt"
+      },
+      {
+        "key": "D",
+        "text": "Để cho server biết rằng nó nên thay thế đối tượng được đặt tên này bằng phiên bản mới của đối tượng được,gắn vào GET, nếu đối tượng chưa được sửa đổi kể từ thời gian đã chỉ định"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Để cho server biết rằng client đã lưu trữ đối tượng này từ GET trước đó và thời gian nó được lưu vào bộ đệm."
+  },
+  {
+    "id": 1,
+    "week": 7,
+    "type": "mcq",
+    "question": "Định nghĩa nào dưới đây mô tả ý nghĩa của thuật ngữ \"đóng gói-encapsulation\"?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Xác định tên của máy chủ đích, dịch tên đó sang địa chỉ IP và sau đó đặt giá trị đó vào trường packet header"
+      },
+      {
+        "key": "B",
+        "text": "Lấy dữ liệu từ lớp trên, thêm các trường tiêu đề thích hợp cho lớp này, sau đó đặt dữ liệu vào trường,payload của \"packet\" cho lớp đó"
+      },
+      {
+        "key": "C",
+        "text": "Nhận một \"packet\" từ lớp bên dưới, trích xuất trường payload và sau một số hành động nội bộ có thể phân,phối payload đó đến giao thức lớp trên"
+      },
+      {
+        "key": "D",
+        "text": "Tính tổng của tất cả các byte trong một packet và đặt giá trị đó vào trường tiêu đề gói"
+      }
+    ],
+    "answer": [
+      "B"
+    ],
+    "multi": false,
+    "explanation": "Lấy dữ liệu từ lớp trên, thêm các trường tiêu đề thích hợp cho lớp này, sau đó đặt dữ liệu vào trường payload của,\"packet\" cho lớp đó."
+  },
+  {
+    "id": 20,
+    "week": 7,
+    "type": "mcq",
+    "question": "Mục đích của cookie value trong HTTP GET request là gì?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "cookie value cho biết người dùng muốn sử dụng HTTP/1, HTTP/1.1 hay HTTP/2 cho GET request này"
+      },
+      {
+        "key": "B",
+        "text": "cookie value mã hóa một tập hợp tùy chọn mặc định mà người dùng đã chỉ định trước đó cho trang web này"
+      },
+      {
+        "key": "C",
+        "text": "Bản thân cookie value không có ý nghĩa gì cả. Nó chỉ là một giá trị được web server trả về cho client,trong quá trình tương tác trước đó"
+      },
+      {
+        "key": "D",
+        "text": "cookie value mã hóa định dạng của câu trả lời được client ưa thích trong phản hồi cho GET request"
+      }
+    ],
+    "answer": [
+      "C"
+    ],
+    "multi": false,
+    "explanation": "Bản thân cookie value không có ý nghĩa gì cả."
+  },
+  {
+    "id": 2,
+    "week": 7,
+    "type": "matching",
+    "question": "Ghép mô tả về biện pháp bảo vệ an ninh với tên của nó.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Chữ ký số"
+      },
+      {
+        "key": "B",
+        "text": "Mã hóa"
+      },
+      {
+        "key": "C",
+        "text": "Tường lửa"
+      },
+      {
+        "key": "D",
+        "text": "Xác thực"
+      }
+    ],
+    "answer": {
+      "Chứng minh bạn là người như bạn nói": "D",
+      "Hạn chế sử dụng tài nguyên hoặc khả năng cho người dùng nhất định": "E",
+      "Cung cấp tính bảo mật bằng cách mã hóa nội dung": "B",
+      "Được sử dụng để phát hiện sự giả mạo/thay đổi nội dung tin nhắn và để xác định người tạo tin nhắn": "A",
+      "Các \"middlebox\" chuyên dụng lọc hoặc chặn lưu lượng, kiểm tra kiểm tra nội dung gói tin": "C"
+    },
+    "multi": false,
+    "explanation": "s:,Chứng minh bạn là người như bạn nói."
+  },
+  {
+    "id": 3,
+    "week": 7,
+    "type": "mcq",
+    "question": "Nối tên tổ chức bên dưới với vai trò của tổ chức đó trong quản trị Internet. Để trả lời câu hỏi này, bạn cần,xem video bổ sung Chương 1 về \"Ai kiểm soát Internet?\".,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Xử lý (gán, phân xử) tên Internet và quản lý root level của DNS"
+      },
+      {
+        "key": "B",
+        "text": "Đặt ra các tiêu chuẩn kỹ thuật cho hệ thống di động 3G, 4G và 5G"
+      },
+      {
+        "key": "C",
+        "text": "Một cơ quan thảo luận nhiều bên liên quan, do Liên hợp quốc triệu tập, không đưa ra quyết định nhưng,thông báo và truyền cảm hứng cho những người thực hiện"
+      },
+      {
+        "key": "D",
+        "text": "Đặt tiêu chuẩn kỹ thuật cho các tiêu chuẩn lớp liên kết Ethernet và WiFi"
+      },
+      {
+        "key": "E",
+        "text": ",Diễn đàn quản trị Internet (IGF),C,,Internet Corporation for Assigned Names and Numbers (ICANN),A,,Dự án hợp tác thế hệ thứ 3 (3GPP),B,,Your answer is correct"
+      }
+    ],
+    "answer": [
+      "D",
+      "E",
+      "C",
+      "A",
+      "B"
+    ],
+    "multi": true,
+    "explanation": ""
+  },
+  {
+    "id": 4,
+    "week": 7,
+    "type": "mcq",
+    "question": "Vào năm 2021, Liên minh Viễn thông Quốc tế (ITU) đã báo cáo rằng 61,6% dân số thế giới là \"người dùng,Internet\". Trở thành \"người dùng Internet\" theo ITU nghĩa là gì? Để trả lời câu hỏi này, bạn cần phải xem,video bổ sung chương 1 về \"Ai sử dụng Internet?\",",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Ai đó đã sử dụng Internet ít nhất một lần trong ba tháng qua"
+      },
+      {
+        "key": "B",
+        "text": "Trung bình ai đó sử dụng Internet ít nhất một lần một ngày"
+      },
+      {
+        "key": "C",
+        "text": "Ai đó sử dụng Internet trung bình ít nhất một lần một tuần"
+      },
+      {
+        "key": "D",
+        "text": "Ai đó đã sử dụng Internet ít nhất một lần trong một tháng qua.,Your answer is correct.,Câu trả lời đúng là:,Ai đó đã sử dụng Internet ít nhất một lần trong ba tháng qua"
+      }
+    ],
+    "answer": [
+      "A"
+    ],
+    "multi": false,
+    "explanation": "Ai đó đã sử dụng Internet ít nhất một lần trong ba tháng qua."
+  },
+  {
+    "id": 5,
+    "week": 7,
+    "type": "mcq",
+    "question": "Đặc điểm nào dưới đây có liên quan đến cách tiếp cận client-server để cấu trúc các ứng dụng mạng,(ngược lại với cách tiếp cận P2P)?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Có một máy chủ có địa chỉ IP phổ biến"
+      },
+      {
+        "key": "B",
+        "text": "Không có máy chủ nào luôn bật"
+      },
+      {
+        "key": "C",
+        "text": "Một tiến trình yêu cầu dịch vụ từ những người mà nó liên hệ và sẽ cung cấp dịch vụ cho những tiến trình liên,hệ với nó"
+      },
+      {
+        "key": "D",
+        "text": "HTTP sử dụng cấu trúc ứng dụng này"
+      },
+      {
+        "key": "E",
+        "text": "Có một máy chủ luôn hoạt động.,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": "are:,HTTP sử dụng cấu trúc ứng dụng này,,Có một máy chủ luôn hoạt động."
+  },
+  {
+    "id": 6,
+    "week": 7,
+    "type": "mcq",
+    "question": "Đặc điểm nào dưới đây có liên quan đến cách tiếp cận P2P để cấu trúc các ứng dụng mạng?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Có một máy chủ luôn hoạt động"
+      },
+      {
+        "key": "B",
+        "text": "Có một máy chủ có địa chỉ IP phổ biến"
+      },
+      {
+        "key": "C",
+        "text": "HTTP sử dụng cấu trúc ứng dụng này"
+      },
+      {
+        "key": "D",
+        "text": "Một tiến trình yêu cầu dịch vụ từ những người mà nó liên hệ và sẽ cung cấp dịch vụ cho những tiến trình,liên hệ với nó"
+      },
+      {
+        "key": "E",
+        "text": "Không có máy chủ nào luôn bật.,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": "are:,Một tiến trình yêu cầu dịch vụ từ những người mà nó liên hệ và sẽ cung cấp dịch vụ cho những tiến trình liên hệ,với nó."
+  },
+  {
+    "id": 7,
+    "week": 7,
+    "type": "mcq",
+    "question": "Khi một ứng dụng sử dụng ổ cắm UDP, UDP cung cấp dịch vụ truyền tải nào cho ứng dụng?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Loss-free data transfer. Dịch vụ sẽ truyền tất cả dữ liệu đến người nhận một cách đáng tin cậy, khôi phục từ,các gói bị rơi trong mạng do tràn bộ đệm của bộ định tuyến"
+      },
+      {
+        "key": "B",
+        "text": "Congestion control. Dịch vụ sẽ kiểm soát người gửi để người gửi không gửi chung nhiều dữ liệu hơn mức mà,các liên kết trong mạng có thể xử lý"
+      },
+      {
+        "key": "C",
+        "text": "Flow Control. Dịch vụ được cung cấp sẽ đảm bảo rằng người gửi không gửi quá nhanh đến mức làm tràn bộ,đệm của người nhận"
+      },
+      {
+        "key": "D",
+        "text": "Best effort service. Dịch vụ sẽ nỗ lực hết sức để cung cấp dữ liệu đến đích nhưng không đảm bảo rằng,bất kỳ phân đoạn dữ liệu cụ thể cũng nào sẽ thực sự đến đó"
+      },
+      {
+        "key": "E",
+        "text": "Throughput guarantee. Ổ cắm có thể được cấu hình để cung cấp đảm bảo thông lượng tối thiểu giữa người,gửi và người nhận"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": "Best effort service."
+  },
+  {
+    "id": 8,
+    "week": 7,
+    "type": "mcq",
+    "question": "Khi một ứng dụng sử dụng ổ cắm TCP, dịch vụ truyền tải nào được cung cấp cho ứng dụng bởi TCP?,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Loss-free data transfer. Dịch vụ sẽ truyền tải cả dữ liệu đến người nhận một cách đáng tin cậy, khôi phục,từ các gói bị rơi trong mạng do tràn bộ đệm của bộ định tuyến"
+      },
+      {
+        "key": "B",
+        "text": "Flow Control. Dịch vụ được cung cấp sẽ đảm bảo rằng người gửi không gửi quá nhanh đến mức làm tràn,bộ đệm của người nhận"
+      },
+      {
+        "key": "C",
+        "text": "Throughput guarantee. Ổ cắm có thể được cấu hình để cung cấp đảm bảo thông lượng tối thiểu giữa người,gửi và người nhận"
+      },
+      {
+        "key": "D",
+        "text": "Congestion control. Dịch vụ sẽ kiểm soát người gửi để người gửi không gửi chung nhiều dữ liệu hơn mức,mà các liên kết trong mạng có thể xử lý"
+      },
+      {
+        "key": "E",
+        "text": "Best effort service. Dịch vụ sẽ nỗ lực hết sức để cung cấp dữ liệu đến đích nhưng không đảm bảo rằng bất,kỳ phân đoạn dữ liệu cụ thể cũng nào sẽ thực sự đến đó"
+      },
+      {
+        "key": "F",
+        "text": "Real-time delivery. Dịch vụ sẽ đảm bảo rằng dữ liệu sẽ được gửi đến người nhận trong một khoảng thời gian,nhất định.,Your answer is correct"
+      }
+    ],
+    "answer": [],
+    "multi": true,
+    "explanation": "are:,Congestion control."
+  },
+  {
+    "id": 9,
+    "week": 7,
+    "type": "mcq",
+    "question": "Ý của tôi là gì khi nói \"HTTP không có trạng thái\"? Giả sử rằng cookie không được sử dụng.,",
+    "image": null,
+    "options": [
+      {
+        "key": "A",
+        "text": "Tôi nói điều này khi HTTP server không hoạt động"
+      },
+      {
+        "key": "B",
+        "text": "HTTP client không nhớ danh tính của severs mà nó đã tương tác"
+      },
+      {
+        "key": "C",
+        "text": "HTTP server không nhớ bất kỳ điều gì đã xảy ra trong các bước trước đó khi tương tác với HTTP client,này"
+      },
+      {
+        "key": "D",
+        "text": "Giao thức HTTP không được cấp phép ở bất kỳ quốc gia nào"
+      }
+    ],
+    "answer": [
+      "C"
+    ],
+    "multi": false,
+    "explanation": "HTTP server không nhớ bất kỳ điều gì đã xảy ra trong các bước trước đó khi tương tác với HTTP client này."
+  }
+]
