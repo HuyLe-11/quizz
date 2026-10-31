@@ -40,7 +40,7 @@ export function QuizNavigation() {
                   aspect-square rounded-md border-2 flex items-center justify-center text-xs font-mono transition-all hover:scale-105
                   ${dotClass}
                 `}
-                title={`Question ${idx + 1}`}
+                title={`Câu ${idx + 1}`}
               >
                 {idx + 1}
               </button>
@@ -56,14 +56,14 @@ export function QuizNavigation() {
             disabled={state.current_index === 0}
             className="flex-1 py-2 rounded-md font-medium text-sm border border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Previous
+            Câu trước
           </button>
           <button
             onClick={() => nextQuestion()}
             disabled={state.current_index === state.exam.question_count - 1}
             className="flex-1 py-2 rounded-md font-medium text-sm bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Next
+            Câu tiếp
           </button>
         </div>
         
@@ -72,7 +72,7 @@ export function QuizNavigation() {
             onClick={submitQuiz}
             className="w-full py-2.5 rounded-md font-bold text-white bg-gradient-to-r from-[var(--color-success)] to-emerald-500 hover:opacity-90 transition-opacity mt-2"
           >
-            Submit Quiz
+            Nộp bài
           </button>
         )}
       </div>

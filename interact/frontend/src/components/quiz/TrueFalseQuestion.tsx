@@ -20,9 +20,9 @@ export function TrueFalseQuestion({ question }: TrueFalseQuestionProps) {
   };
 
   const options = [
-    { value: "true", label: "True" },
-    { value: "false", label: "False" },
-    { value: "ng", label: "Not Given" },
+    { value: "true", label: "Đúng" },
+    { value: "false", label: "Sai" },
+    { value: "ng", label: "Không có thông tin" },
   ];
 
   return (

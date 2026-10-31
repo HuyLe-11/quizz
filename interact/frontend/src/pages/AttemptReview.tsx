@@ -7,13 +7,19 @@ export function AttemptReview() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const attempts = StatsService.getAttempts();
   const attempt = attempts.find((a) => a.id === attemptId) as QuizAttempt | undefined;
+  const questionTypeNames: Record<string, string> = {
+    mcp: "Trắc nghiệm",
+    true_false_ng: "Đúng / Sai / Không có thông tin",
+    matching: "Nối đáp án",
+    fill_in: "Điền vào chỗ trống",
+  };
 
   if (!attempt) {
     return (
       <div className="max-w-4xl mx-auto p-6">
-        <h2 className="text-2xl font-semibold">Attempt not found</h2>
-        <p className="mt-2 text-sm text-[var(--color-text-secondary)]">The requested attempt could not be located.</p>
-        <Link to="/stats" className="mt-4 inline-block text-[var(--color-primary)]">Back to stats</Link>
+        <h2 className="text-2xl font-semibold">Không tìm thấy lần làm bài</h2>
+        <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Không tìm thấy dữ liệu của lần làm bài này.</p>
+        <Link to="/stats" className="mt-4 inline-block text-[var(--color-primary)]">Quay lại thống kê</Link>
       </div>
     );
   }
@@ -24,10 +30,10 @@ export function AttemptReview() {
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--color-text)]">Review: {attempt.exam_title}</h1>
-          <p className="text-sm text-[var(--color-text-secondary)]">Score: {attempt.score}% — Time: {Math.floor(attempt.time_spent/60)}m {attempt.time_spent%60}s</p>
+          <h1 className="text-2xl font-semibold text-[var(--color-text)]">Xem lại: {attempt.exam_title}</h1>
+          <p className="text-sm text-[var(--color-text-secondary)]">Điểm: {attempt.score}% — Thời gian: {Math.floor(attempt.time_spent/60)} phút {attempt.time_spent%60} giây</p>
         </div>
-        <Link to="/stats" className="text-sm text-[var(--color-primary)]">Back</Link>
+        <Link to="/stats" className="text-sm text-[var(--color-primary)]">Quay lại</Link>
       </div>
 
       <div className="space-y-4">
@@ -37,15 +43,15 @@ export function AttemptReview() {
             <div key={qr.question_id} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="text-sm text-[var(--color-text-secondary)]">Question ID: {qr.question_id} — Type: {qr.type}</div>
+                  <div className="text-sm text-[var(--color-text-secondary)]">Câu {qr.question_id} — Dạng: {questionTypeNames[qr.type] || qr.type}</div>
                   {question && <div className="mt-2 text-[var(--color-text)]">{question.question}</div>}
                 </div>
-                <div className={`ml-4 font-semibold ${qr.is_correct ? 'text-emerald-400' : 'text-rose-400'}`}>{qr.is_correct ? 'Correct' : 'Incorrect'}</div>
+                <div className={`ml-4 font-semibold ${qr.is_correct ? 'text-emerald-400' : 'text-rose-400'}`}>{qr.is_correct ? 'Đúng' : 'Sai'}</div>
               </div>
 
               {question?.explanation && (
                 <div className="mt-3 text-sm text-[var(--color-text-secondary)]">
-                  <strong>Explanation:</strong>
+                  <strong>Giải thích:</strong>
                   <div className="mt-1">{question.explanation}</div>
                 </div>
               )}

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuiz } from "../contexts/QuizContext";
+import { getExam } from "../services/api";
 import { MOCK_EXAM } from "../data/mockData";
+import type { Exam } from "../types/types";
 import { QuizProgress } from "../components/quiz/QuizProgress";
 import { QuestionCard } from "../components/quiz/QuestionCard";
 import { QuizNavigation } from "../components/quiz/QuizNavigation";
@@ -14,28 +16,41 @@ export function QuizPage() {
   const navigate = useNavigate();
   const { state, currentQuestion, startQuiz, nextQuestion, prevQuestion, submitQuiz } = useQuiz();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Initialize quiz if accessed directly
   useEffect(() => {
-    if (!state.exam && examId) {
-      // In a real app, fetch exam by examId
-      startQuiz(MOCK_EXAM);
+    if (examId && state.exam?.id !== examId) {
+      if (examId === MOCK_EXAM.id) {
+        startQuiz(MOCK_EXAM);
+        return;
+      }
+      let cancelled = false;
+      getExam(examId).then((exam: Exam) => {
+        if (!cancelled) startQuiz(exam);
+      }).catch((error: Error) => {
+        if (cancelled) return;
+        setLoadError(error.message || "Không thể tải bài trắc nghiệm này.");
+      });
+      return () => { cancelled = true; };
     }
-  }, [state.exam, examId, startQuiz]);
+  }, [state.exam?.id, examId, startQuiz]);
 
-  if (!state.exam || !currentQuestion) {
+  if (!state.exam || state.exam.id !== examId || !currentQuestion) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
-        <div className="animate-pulse flex flex-col items-center">
+        <div className="flex flex-col items-center">
+          {loadError ? <p className="text-[var(--color-danger)]">{loadError}</p> : <>
           <div className="w-12 h-12 border-4 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-[var(--color-text-muted)]">Loading exam...</p>
+          <p className="text-[var(--color-text-muted)]">Đang tải đề...</p>
+          </>}
         </div>
       </div>
     );
   }
 
   const handleBack = () => {
-    if (confirm("Are you sure you want to leave? Your progress will be lost.")) {
+    if (confirm("Bạn có chắc muốn rời khỏi bài làm không? Tiến độ hiện tại sẽ bị mất.")) {
       navigate("/");
     }
   };
@@ -52,7 +67,7 @@ export function QuizPage() {
             <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
-            Back
+            Quay lại
           </button>
           <h2 className="text-lg font-bold text-[var(--color-text)] hidden sm:block truncate max-w-md">
             {state.exam.title}
@@ -94,7 +109,7 @@ export function QuizPage() {
               disabled={state.current_index === 0}
               className="px-4 py-2 rounded-md font-medium border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Previous
+              Câu trước
             </button>
             
             {state.current_index === state.exam.question_count - 1 && !state.is_submitted ? (
@@ -102,7 +117,7 @@ export function QuizPage() {
                 onClick={() => submitQuiz()}
                 className="px-6 py-2 rounded-md font-bold bg-[var(--color-success)] text-white hover:opacity-90"
               >
-                Submit
+                Nộp bài
               </button>
             ) : (
               <button
@@ -110,7 +125,7 @@ export function QuizPage() {
                 disabled={state.current_index === state.exam.question_count - 1}
                 className="px-6 py-2 rounded-md font-medium bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Next
+                Câu tiếp
               </button>
             )}
           </div>
@@ -122,7 +137,7 @@ export function QuizPage() {
           ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
         `}>
           <div className="flex justify-between items-center mb-6 lg:hidden">
-            <h3 className="font-bold text-[var(--color-text)]">Navigation</h3>
+            <h3 className="font-bold text-[var(--color-text)]">Điều hướng câu hỏi</h3>
             <button onClick={() => setIsSidebarOpen(false)} className="p-2 text-[var(--color-text-muted)]">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />

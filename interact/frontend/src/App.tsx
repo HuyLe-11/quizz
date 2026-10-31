@@ -6,6 +6,8 @@ import { HomePage } from "./pages/HomePage";
 import { QuizPage } from "./pages/QuizPage";
 import { StatsPage } from "./pages/StatsPage";
 import { AttemptReview } from "./pages/AttemptReview";
+import { HistoryPage } from "./pages/HistoryPage";
+import { ExamPreviewPage } from "./pages/ExamPreviewPage";
 
 function App() {
   return (
@@ -20,6 +22,8 @@ function App() {
                 <Route path="/quiz/:examId" element={<QuizPage />} />
                 <Route path="/stats" element={<StatsPage />} />
                 <Route path="/attempt/:attemptId" element={<AttemptReview />} />
+                <Route path="/history" element={<HistoryPage />} />
+                <Route path="/exams/:examId" element={<ExamPreviewPage />} />
               </Routes>
             </main>
           </div>

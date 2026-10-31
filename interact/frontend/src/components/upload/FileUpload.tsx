@@ -9,6 +9,7 @@ export function FileUpload() {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [model, setModel] = useState("PaddleOCR-VL-1.6");
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -41,7 +42,7 @@ export function FileUpload() {
 
   const validateAndSetFile = (selectedFile: File) => {
     if (selectedFile.type !== "application/pdf") {
-      setError("Please upload a PDF file.");
+      setError("Vui lòng chọn tệp PDF.");
       return;
     }
     setFile(selectedFile);
@@ -50,7 +51,7 @@ export function FileUpload() {
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
-    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const sizes = ["B", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
@@ -62,10 +63,14 @@ export function FileUpload() {
     setError(null);
 
     try {
-      const response = await uploadPdf(file);
+      const response = await uploadPdf(file, model);
       navigate(`/quiz/${response.exam_id}`);
     } catch (err: any) {
-      setError(err.message || "Failed to upload file.");
+      setError(
+        err.message === "Failed to fetch"
+          ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối rồi thử lại."
+          : err.message || "Tải tệp lên không thành công."
+      );
       setIsUploading(false);
     }
   };
@@ -101,10 +106,10 @@ export function FileUpload() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
           </svg>
           <h3 className="mt-2 text-lg font-semibold text-[var(--color-text)]">
-            Upload PDF
+            Tải tệp PDF lên
           </h3>
           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-            Drag and drop your file here, or click to browse
+            Kéo thả tệp vào đây hoặc nhấn để chọn tệp
           </p>
         </div>
       ) : (
@@ -141,12 +146,25 @@ export function FileUpload() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                Processing...
+                Đang xử lý...
               </>
             ) : (
-              "Generate Quiz"
+              "Tạo bài trắc nghiệm"
             )}
           </button>
+
+          <label className="mt-4 block text-left text-sm text-[var(--color-text-secondary)]">
+            Mô hình OCR
+            <select
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              disabled={isUploading}
+              className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[var(--color-text)]"
+            >
+              <option value="PaddleOCR-VL-1.6">PaddleOCR-VL-1.6 · bố cục tài liệu, công thức và bảng</option>
+              <option value="PP-OCRv6">PP-OCRv6 · nhận dạng văn bản nhanh</option>
+            </select>
+          </label>
         </div>
       )}
 

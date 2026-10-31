@@ -20,6 +20,7 @@ import {
 import type { Exam, UserAnswer, QuizState } from "../types/types";
 import { checkQuestionCorrectness, StatsService } from "../services/stats";
 import { MOCK_SUBJECTS } from "../data/mockData";
+import { saveQuizAttempt } from "../services/api";
 
 // -- Actions --
 
@@ -141,7 +142,7 @@ export function QuizProvider({ children }: { children: ReactNode }) {
       exam_id: state.exam.id,
       exam_title: state.exam.title,
       subject_id: state.exam.subject_id,
-      subject_name: subject?.name ?? "Unknown",
+      subject_name: subject?.name ?? "Chưa xác định",
       score,
       total_questions,
       correct_answers_count,
@@ -149,6 +150,18 @@ export function QuizProvider({ children }: { children: ReactNode }) {
       answers: state.answers,
       question_results,
     });
+
+    if (!state.exam.id.startsWith("exam-")) {
+      void saveQuizAttempt(state.exam.id, {
+        score,
+        total_questions,
+        correct_answers_count,
+        time_spent,
+        answers: state.answers,
+        question_results,
+        completed_at: Date.now(),
+      }).catch(() => undefined);
+    }
 
     dispatch({ type: "SUBMIT_QUIZ" });
   }, [state]);

@@ -13,36 +13,36 @@ import type { Subject, Exam, Question } from "../types/types";
 export const MOCK_SUBJECTS: Subject[] = [
   {
     id: "net101",
-    name: "Computer Networks",
-    description: "Networking fundamentals, TCP/IP, HTTP protocols",
+    name: "Mạng máy tính",
+    description: "Kiến thức mạng cơ bản, TCP/IP và giao thức HTTP",
     exam_count: 4,
     icon: "globe",
   },
   {
     id: "os201",
-    name: "Operating Systems",
-    description: "Process management, memory, file systems",
+    name: "Hệ điều hành",
+    description: "Quản lý tiến trình, bộ nhớ và hệ thống tệp",
     exam_count: 3,
     icon: "cpu",
   },
   {
     id: "db301",
-    name: "Database Systems",
-    description: "SQL, normalization, transactions, indexing",
+    name: "Hệ quản trị cơ sở dữ liệu",
+    description: "SQL, chuẩn hóa, giao dịch và lập chỉ mục",
     exam_count: 5,
     icon: "database",
   },
   {
     id: "algo401",
-    name: "Data Structures & Algorithms",
-    description: "Sorting, searching, trees, graphs, dynamic programming",
+    name: "Cấu trúc dữ liệu và giải thuật",
+    description: "Sắp xếp, tìm kiếm, cây, đồ thị và quy hoạch động",
     exam_count: 6,
     icon: "code",
   },
   {
     id: "se501",
-    name: "Software Engineering",
-    description: "SDLC, Agile, design patterns, testing",
+    name: "Công nghệ phần mềm",
+    description: "Vòng đời phát triển phần mềm, Agile, mẫu thiết kế và kiểm thử",
     exam_count: 2,
     icon: "layers",
   },
@@ -57,7 +57,7 @@ const mockQuestions: Question[] = [
     type: "mcp",
     multiple_choice: false,
     question:
-      "Which transport layer protocol provides reliable, ordered delivery of data?",
+      "Giao thức nào ở tầng giao vận đảm bảo dữ liệu được truyền tin cậy và đúng thứ tự?",
     options: [
       { label: "A", content: "UDP" },
       { label: "B", content: "TCP" },
@@ -66,7 +66,7 @@ const mockQuestions: Question[] = [
     ],
     option_answer: ["B"],
     explanation:
-      "TCP (Transmission Control Protocol) provides reliable, ordered, and error-checked delivery of a stream of bytes between applications. It uses acknowledgments, sequence numbers, and retransmission to ensure reliability.",
+      "TCP (Giao thức điều khiển truyền vận) truyền luồng byte giữa các ứng dụng một cách tin cậy, đúng thứ tự và có kiểm tra lỗi. TCP sử dụng thông báo xác nhận, số thứ tự và cơ chế truyền lại để đảm bảo độ tin cậy.",
   },
 
   // MCP - Multiple choice
@@ -75,20 +75,20 @@ const mockQuestions: Question[] = [
     type: "mcp",
     multiple_choice: true,
     question:
-      "Which of the following are features of **packet switching**? (Select all that apply)",
+      "Đâu là đặc điểm của **chuyển mạch gói**? (Chọn tất cả đáp án đúng)",
     options: [
-      { label: "A", content: "Resources are used on-demand, not reserved" },
-      { label: "B", content: "Used on the Internet" },
-      { label: "C", content: "FDM and TDM are two methods of implementation" },
+      { label: "A", content: "Tài nguyên được sử dụng khi cần, không được dành riêng trước" },
+      { label: "B", content: "Được sử dụng trên Internet" },
+      { label: "C", content: "FDM và TDM là hai phương thức triển khai" },
       {
         label: "D",
-        content: "Congestion loss and variable delay may occur",
+        content: "Có thể xảy ra mất gói do tắc nghẽn và độ trễ thay đổi",
       },
-      { label: "E", content: "Data may queue before transmission" },
+      { label: "E", content: "Dữ liệu có thể phải chờ trong hàng đợi trước khi truyền" },
     ],
     option_answer: ["A", "B", "D", "E"],
     explanation:
-      "Packet switching does not reserve resources (unlike circuit switching which uses FDM/TDM). Data is sent in packets that may queue at routers, causing variable delay and potential congestion loss.",
+      "Chuyển mạch gói không dành riêng tài nguyên trước (khác với chuyển mạch kênh sử dụng FDM/TDM). Dữ liệu được chia thành các gói và có thể phải chờ tại bộ định tuyến, gây ra độ trễ thay đổi hoặc mất gói do tắc nghẽn.",
   },
 
   // True/False/Not Given
@@ -97,10 +97,10 @@ const mockQuestions: Question[] = [
     type: "true_false_ng",
     multiple_choice: false,
     question:
-      'The best-effort delivery service of the network layer means that IP makes its "best effort" to deliver segments between communicating hosts but makes no guarantees. In particular, it does not guarantee segment delivery, does not guarantee orderly delivery of segments, and does not guarantee the integrity of the data in the segments.',
+      'Dịch vụ chuyển phát "nỗ lực tối đa" của tầng mạng có nghĩa là IP cố gắng chuyển các phân đoạn dữ liệu giữa các máy chủ giao tiếp nhưng không đảm bảo kết quả. Cụ thể, IP không đảm bảo phân đoạn sẽ được chuyển đến nơi, không đảm bảo thứ tự nhận và cũng không đảm bảo tính toàn vẹn của dữ liệu.',
     option_answer: ["true"],
     explanation:
-      "This is a correct description of IP's best-effort service. IP is connectionless and unreliable by design - reliability is provided by upper layers like TCP.",
+      "Đây là mô tả chính xác về dịch vụ nỗ lực tối đa của IP. IP được thiết kế theo kiểu không kết nối và không đảm bảo độ tin cậy; các tầng cao hơn như TCP sẽ đảm nhiệm việc này.",
   },
 
   // Matching
@@ -109,30 +109,30 @@ const mockQuestions: Question[] = [
     type: "matching",
     multiple_choice: false,
     question:
-      "Match each component of packet delay with its correct description.",
+      "Ghép từng thành phần độ trễ gói tin với mô tả tương ứng.",
     matches: [
       {
         description:
-          "Time spent transmitting the bits of the packet onto the link",
-        answer: "Transmission delay",
+          "Thời gian truyền các bit của gói tin lên đường truyền",
+        answer: "Độ trễ truyền dẫn",
       },
       {
         description:
-          "Time for bits to physically travel through the medium from one end to the other",
-        answer: "Propagation delay",
+          "Thời gian để các bit truyền qua môi trường vật lý từ đầu này đến đầu kia",
+        answer: "Độ trễ lan truyền",
       },
       {
         description:
-          "Time needed to perform integrity checks, table lookups, and move packet from input to output link",
-        answer: "Processing delay",
+          "Thời gian kiểm tra tính toàn vẹn, tra cứu bảng và chuyển gói tin từ cổng vào sang cổng ra",
+        answer: "Độ trễ xử lý",
       },
       {
-        description: "Time waiting in the packet buffer for link transmission",
-        answer: "Queueing delay",
+        description: "Thời gian gói tin chờ trong bộ đệm trước khi được truyền đi",
+        answer: "Độ trễ hàng đợi",
       },
     ],
     explanation:
-      "The four components of packet delay are: processing (checking bits, determining output link), queueing (waiting in buffer), transmission (pushing bits onto link, L/R), and propagation (physical travel time, d/s).",
+      "Bốn thành phần độ trễ gói tin gồm: xử lý (kiểm tra bit, xác định cổng ra), hàng đợi (chờ trong bộ đệm), truyền dẫn (đưa bit lên đường truyền, L/R) và lan truyền (thời gian truyền vật lý, d/s).",
   },
 
   // Fill-in
@@ -141,10 +141,10 @@ const mockQuestions: Question[] = [
     type: "fill_in",
     multiple_choice: false,
     question:
-      "Given a packet of length L = 1500 bytes (1 byte = 8 bits) and a link transmission rate R = 1 Gbps, what is the transmission delay? Express your answer in seconds using scientific notation (e.g., `1.2e-5`).",
+      "Một gói tin có độ dài L = 1500 byte (1 byte = 8 bit) được truyền trên đường truyền có tốc độ R = 1 Gbps. Độ trễ truyền dẫn là bao nhiêu? Hãy trả lời bằng giây ở dạng ký hiệu khoa học (ví dụ: `1.2e-5`).",
     fill_in_answers: ["0.000012", "1.2e-5"],
     explanation:
-      "Transmission delay = L/R = (1500 * 8) bits / (10^9 bits/sec) = 12000 / 10^9 = 1.2 * 10^-5 seconds = 0.000012 seconds.",
+      "Độ trễ truyền dẫn = L/R = (1500 * 8) bit / (10^9 bit/giây) = 12000 / 10^9 = 1.2 * 10^-5 giây = 0.000012 giây.",
   },
 
   // MCP with code in options
@@ -153,16 +153,16 @@ const mockQuestions: Question[] = [
     type: "mcp",
     multiple_choice: false,
     question:
-      "What is the output of the following Python code?\n\n```python\ndef foo(x, y=[]):\n    y.append(x)\n    return y\n\nprint(foo(1))\nprint(foo(2))\n```",
+      "Đoạn mã Python sau in ra kết quả gì?\n\n```python\ndef foo(x, y=[]):\n    y.append(x)\n    return y\n\nprint(foo(1))\nprint(foo(2))\n```",
     options: [
-      { label: "A", content: "`[1]` then `[2]`" },
-      { label: "B", content: "`[1]` then `[1, 2]`" },
-      { label: "C", content: "`[1]` then `[1]`" },
-      { label: "D", content: "Error" },
+      { label: "A", content: "`[1]` rồi đến `[2]`" },
+      { label: "B", content: "`[1]` rồi đến `[1, 2]`" },
+      { label: "C", content: "`[1]` rồi đến `[1]`" },
+      { label: "D", content: "Lỗi" },
     ],
     option_answer: ["B"],
     explanation:
-      "In Python, default mutable arguments (like lists) are shared across function calls. The list `y` is created once when the function is defined, so subsequent calls append to the same list. This is a common Python gotcha.",
+      "Trong Python, các đối số mặc định có thể thay đổi (như danh sách) được dùng chung giữa các lần gọi hàm. Danh sách `y` chỉ được tạo một lần khi định nghĩa hàm, nên những lần gọi sau sẽ nối thêm phần tử vào cùng danh sách đó. Đây là lỗi dễ gặp khi lập trình Python.",
   },
 
   // MCP with LaTeX
@@ -171,7 +171,7 @@ const mockQuestions: Question[] = [
     type: "mcp",
     multiple_choice: false,
     question:
-      "What is the value of the integral $\\int_0^1 x^2 \\, dx$ ?",
+      "Giá trị của tích phân $\\int_0^1 x^2 \\, dx$ bằng bao nhiêu?",
     options: [
       { label: "A", content: "$\\frac{1}{2}$" },
       { label: "B", content: "$\\frac{1}{3}$" },
@@ -180,7 +180,7 @@ const mockQuestions: Question[] = [
     ],
     option_answer: ["B"],
     explanation:
-      "Using the power rule: $\\int_0^1 x^2 \\, dx = \\left[\\frac{x^3}{3}\\right]_0^1 = \\frac{1}{3} - 0 = \\frac{1}{3}$",
+      "Áp dụng quy tắc lũy thừa: $\\int_0^1 x^2 \\, dx = \\left[\\frac{x^3}{3}\\right]_0^1 = \\frac{1}{3} - 0 = \\frac{1}{3}$",
   },
 
   // True/False - false answer
@@ -189,10 +189,10 @@ const mockQuestions: Question[] = [
     type: "true_false_ng",
     multiple_choice: false,
     question:
-      "HTTP is a stateful protocol that remembers previous interactions with clients across multiple requests.",
+      "HTTP là giao thức có trạng thái và ghi nhớ các tương tác trước đó với máy khách qua nhiều yêu cầu.",
     option_answer: ["false"],
     explanation:
-      "HTTP is stateless - the server does not retain any information about past client requests. State is typically maintained using cookies or session tokens, which are not part of the core HTTP protocol.",
+      "HTTP là giao thức phi trạng thái: máy chủ không lưu thông tin về các yêu cầu trước đó của máy khách. Trạng thái thường được duy trì bằng cookie hoặc mã phiên; chúng không thuộc phần cốt lõi của giao thức HTTP.",
   },
 ];
 
@@ -201,7 +201,7 @@ const mockQuestions: Question[] = [
 export const MOCK_EXAM: Exam = {
   id: "exam-001",
   subject_id: "net101",
-  title: "Computer Networks - Week 4",
+  title: "Mạng máy tính - Tuần 4",
   question_count: mockQuestions.length,
   questions: mockQuestions,
 };
@@ -212,28 +212,28 @@ export const MOCK_EXAMS: Exam[] = [
   {
     id: "exam-001",
     subject_id: "net101",
-    title: "Week 4 - Network Layer",
+    title: "Tuần 4 - Tầng mạng",
     question_count: 8,
     questions: mockQuestions,
   },
   {
     id: "exam-002",
     subject_id: "net101",
-    title: "Week 5 - Transport Layer",
+    title: "Tuần 5 - Tầng giao vận",
     question_count: 12,
     questions: [],
   },
   {
     id: "exam-003",
     subject_id: "net101",
-    title: "Week 6 - Application Layer",
+    title: "Tuần 6 - Tầng ứng dụng",
     question_count: 15,
     questions: [],
   },
   {
     id: "exam-004",
     subject_id: "net101",
-    title: "Week 7 - Security",
+    title: "Tuần 7 - Bảo mật",
     question_count: 10,
     questions: [],
   },

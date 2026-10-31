@@ -44,13 +44,13 @@ export function FillInQuestion({ question }: FillInQuestionProps) {
         value={val}
         onChange={handleChange}
         disabled={state.is_submitted}
-        placeholder="Type your answer here..."
+        placeholder="Nhập câu trả lời..."
         className={`w-full max-w-md p-4 rounded-xl border-2 focus:ring-4 focus:ring-[var(--color-primary-light)] focus:outline-none transition-all font-medium text-lg ${inputClass}`}
       />
       
       {state.is_submitted && question.fill_in_answers && (
         <div className="mt-4 p-4 bg-[var(--color-bg-tertiary)] border-l-4 border-[var(--color-info)] rounded-r-lg">
-          <p className="text-sm text-[var(--color-text-secondary)] mb-1 font-medium">Accepted answers:</p>
+          <p className="text-sm text-[var(--color-text-secondary)] mb-1 font-medium">Các đáp án được chấp nhận:</p>
           <div className="flex flex-wrap gap-2">
             {question.fill_in_answers.map((ans, i) => (
               <span key={i} className="px-3 py-1 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-md font-mono text-sm text-[var(--color-info)]">

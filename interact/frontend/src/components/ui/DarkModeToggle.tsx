@@ -11,7 +11,7 @@ export function DarkModeToggle() {
     <button
       onClick={toggleTheme}
       className="p-2 rounded-md hover:bg-[var(--color-surface-hover)] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary-light)]"
-      aria-label="Toggle dark mode"
+      aria-label={theme === "light" ? "Bật giao diện tối" : "Bật giao diện sáng"}
     >
       {theme === "light" ? (
         // Moon icon for switching to dark

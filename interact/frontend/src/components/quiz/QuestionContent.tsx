@@ -87,7 +87,7 @@ function parseContent(text: string): React.ReactNode[] {
           <img 
             key={`img-${baseKey}-${inlineMatch.index}`} 
             src={inlineMatch[4]} 
-            alt={inlineMatch[3] || "image"} 
+            alt={inlineMatch[3] || "hình ảnh"}
             className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
             loading="lazy"
           />

@@ -14,9 +14,9 @@ export function QuizProgress() {
   return (
     <div className="w-full bg-[var(--color-surface)] p-4 rounded-xl border border-[var(--color-border)] shadow-sm">
       <div className="flex justify-between items-center mb-2 text-sm">
-        <span className="font-medium text-[var(--color-text-secondary)]">Progress</span>
+        <span className="font-medium text-[var(--color-text-secondary)]">Tiến độ</span>
         <span className="font-mono font-semibold text-[var(--color-primary)]">
-          {answeredCount} of {total} answered
+          Đã trả lời {answeredCount}/{total} câu
         </span>
       </div>
       <div className="w-full h-2.5 bg-[var(--color-bg-tertiary)] rounded-full overflow-hidden">

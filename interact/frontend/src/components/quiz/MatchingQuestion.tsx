@@ -33,8 +33,8 @@ export function MatchingQuestion({ question }: MatchingQuestionProps) {
   return (
     <div className="flex flex-col gap-4">
       <div className="hidden md:grid md:grid-cols-12 gap-4 mb-2 px-4 text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-        <div className="col-span-7">Description</div>
-        <div className="col-span-5">Match</div>
+        <div className="col-span-7">Mô tả</div>
+        <div className="col-span-5">Đáp án ghép</div>
       </div>
       
       {question.matches.filter(m => m.description).map((match, idx) => {
@@ -72,7 +72,7 @@ export function MatchingQuestion({ question }: MatchingQuestionProps) {
                 disabled={state.is_submitted}
                 className={`w-full p-2.5 rounded-lg border focus:ring-2 focus:ring-[var(--color-primary-light)] focus:outline-none transition-colors text-sm ${selectClass}`}
               >
-                <option value="" disabled>-- Select a match --</option>
+                <option value="" disabled>-- Chọn đáp án --</option>
                 {availableAnswers.map((ans, aIdx) => (
                   <option key={aIdx} value={ans}>
                     {/* Note: option tags can't render HTML/JSX, so we strip tags or show raw string. */}
@@ -86,7 +86,7 @@ export function MatchingQuestion({ question }: MatchingQuestionProps) {
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                   </svg>
-                  Correct: {match.answer}
+                  Đáp án đúng: {match.answer}
                 </div>
               )}
             </div>

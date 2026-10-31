@@ -18,7 +18,9 @@ export function checkQuestionCorrectness(question: Question, answer: UserAnswer 
   switch (question.type) {
     case "mcp": {
       const selected = answer.selected_options || [];
-      const correct = question.option_answer || [];
+      const correct = question.user_confirmed_answer
+        ? [question.user_confirmed_answer]
+        : question.option_answer || [];
       if (selected.length !== correct.length) return false;
       // All selected options must be in the correct answers list
       return selected.every((val) => correct.includes(val));
@@ -170,7 +172,7 @@ export const StatsService = {
       .slice()
       .reverse()
       .map((attempt) => {
-        const dateStr = new Date(attempt.completed_at).toLocaleDateString("en-US", {
+        const dateStr = new Date(attempt.completed_at).toLocaleDateString("vi-VN", {
           month: "short",
           day: "numeric",
           hour: "2-digit",

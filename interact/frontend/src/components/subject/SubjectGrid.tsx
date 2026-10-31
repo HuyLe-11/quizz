@@ -15,7 +15,7 @@ export function SubjectGrid({ subjects, onSelectSubject, loading = false }: Subj
     return (
       <div className="w-full">
         <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6 text-center">
-          Or choose from available subjects
+          Hoặc chọn một môn học
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2, 3].map((i) => (
@@ -35,7 +35,7 @@ export function SubjectGrid({ subjects, onSelectSubject, loading = false }: Subj
   if (subjects.length === 0) {
     return (
       <div className="w-full text-center py-10">
-        <p className="text-[var(--color-text-muted)]">No subjects available.</p>
+        <p className="text-[var(--color-text-muted)]">Chưa có môn học nào.</p>
       </div>
     );
   }
@@ -43,7 +43,7 @@ export function SubjectGrid({ subjects, onSelectSubject, loading = false }: Subj
   return (
     <div className="w-full">
       <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6 text-center">
-        Or choose from available subjects
+        Hoặc chọn một môn học
       </h2>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {subjects.map((subject) => (

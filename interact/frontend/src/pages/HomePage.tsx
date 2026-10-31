@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { FileUpload } from "../components/upload/FileUpload";
 import { SubjectGrid } from "../components/subject/SubjectGrid";
 import { MOCK_SUBJECTS, MOCK_EXAMS, MOCK_EXAM } from "../data/mockData";
-import type { Subject } from "../types/types";import { useQuiz } from "../contexts/QuizContext";
+import type { Subject } from "../types/types";
+import { useQuiz } from "../contexts/QuizContext";
 
 /**
  * Landing page with upload area and subject selection.
@@ -37,10 +38,10 @@ export function HomePage() {
     <div className="w-full max-w-5xl mx-auto px-6 py-12 animate-fade-in">
       <div className="text-center mb-12">
         <h1 className="text-4xl md:text-5xl font-bold text-[var(--color-text)] mb-4 tracking-tight">
-          Create Your Quiz
+          Tạo bài trắc nghiệm
         </h1>
         <p className="text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto">
-          Upload a PDF document to automatically generate a quiz, or choose from our pre-made subjects to test your knowledge.
+          Tải lên tệp PDF để tự động tạo bài trắc nghiệm hoặc chọn một môn học có sẵn để ôn tập.
         </p>
       </div>
 
@@ -48,7 +49,7 @@ export function HomePage() {
 
       <div className="flex items-center justify-center my-12">
         <div className="h-px bg-[var(--color-border)] flex-grow max-w-xs"></div>
-        <span className="px-4 text-[var(--color-text-muted)] text-sm uppercase tracking-wider font-medium">Or</span>
+        <span className="px-4 text-[var(--color-text-muted)] text-sm uppercase tracking-wider font-medium">Hoặc</span>
         <div className="h-px bg-[var(--color-border)] flex-grow max-w-xs"></div>
       </div>
 
@@ -66,7 +67,7 @@ export function HomePage() {
                 <h3 className="text-lg font-bold text-[var(--color-text)]">
                   {selectedSubject.name}
                 </h3>
-                <p className="text-xs text-[var(--color-text-secondary)]">Select an exam to start</p>
+        <p className="text-xs text-[var(--color-text-secondary)]">Chọn đề để bắt đầu</p>
               </div>
               <button
                 onClick={closeSubjectModal}
@@ -92,7 +93,7 @@ export function HomePage() {
                           {exam.title}
                         </h4>
                         <span className="text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-tertiary)] px-2 py-1 rounded">
-                          {exam.question_count} questions
+                          {exam.question_count} câu hỏi
                         </span>
                       </div>
                       <div className="text-[var(--color-primary)] opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-[-10px] group-hover:translate-x-0 duration-300">
@@ -105,7 +106,7 @@ export function HomePage() {
                 </div>
               ) : (
                 <div className="text-center py-8 text-[var(--color-text-muted)]">
-                  No exams available for this subject yet.
+                Môn học này chưa có đề thi.
                 </div>
               )}
             </div>

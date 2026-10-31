@@ -5,6 +5,7 @@ import { McpQuestion } from "./McpQuestion";
 import { TrueFalseQuestion } from "./TrueFalseQuestion";
 import { MatchingQuestion } from "./MatchingQuestion";
 import { FillInQuestion } from "./FillInQuestion";
+import { QuestionTools } from "./QuestionTools";
 import type { Question } from "../../types/types";
 
 interface QuestionCardProps {
@@ -32,10 +33,10 @@ export function QuestionCard({ question, questionIndex }: QuestionCardProps) {
 
   const formatTypeLabel = (type: string) => {
     switch (type) {
-      case "mcp": return "Multiple Choice";
-      case "true_false_ng": return "True / False";
-      case "matching": return "Matching";
-      case "fill_in": return "Fill in Blank";
+      case "mcp": return "Trắc nghiệm";
+      case "true_false_ng": return "Đúng / Sai / Không có thông tin";
+      case "matching": return "Nối đáp án";
+      case "fill_in": return "Điền vào chỗ trống";
       default: return type;
     }
   };
@@ -51,7 +52,7 @@ export function QuestionCard({ question, questionIndex }: QuestionCardProps) {
       case "fill_in":
         return <FillInQuestion question={question} />;
       default:
-        return <div className="text-red-500">Unsupported question type</div>;
+        return <div className="text-red-500">Dạng câu hỏi chưa được hỗ trợ</div>;
     }
   };
 
@@ -59,7 +60,7 @@ export function QuestionCard({ question, questionIndex }: QuestionCardProps) {
     <div className="w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 md:p-8 shadow-sm animate-fade-in-up">
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <span className="font-mono text-sm font-bold text-[var(--color-text-muted)]">
-          Question {questionIndex + 1}
+          Câu {questionIndex + 1}
         </span>
         <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border ${getBadgeStyle(question.type)}`}>
           {formatTypeLabel(question.type)}
@@ -67,7 +68,7 @@ export function QuestionCard({ question, questionIndex }: QuestionCardProps) {
         
         {question.type === "mcp" && question.multiple_choice && (
           <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-            Multiple answers
+            Chọn nhiều đáp án
           </span>
         )}
       </div>
@@ -79,6 +80,8 @@ export function QuestionCard({ question, questionIndex }: QuestionCardProps) {
       <div className="mb-4">
         {renderQuestionInput()}
       </div>
+
+      {question.question_record_id && <QuestionTools question={question} />}
 
       {state.is_submitted && question.explanation && (
         <ExplanationBox explanation={question.explanation} />

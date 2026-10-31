@@ -50,6 +50,8 @@ export interface Match {
  */
 export interface Question {
   question_id: number;
+  question_record_id?: string;
+  has_source_pdf?: boolean;
   type: QuestionType;
   multiple_choice: boolean;
   question: string;
@@ -58,6 +60,21 @@ export interface Question {
   fill_in_answers?: string[];
   matches?: Match[];
   explanation?: string;
+  page_number?: number | null;
+  question_image_url?: string | null;
+  crop_status?: "success" | "failed" | "not_created" | string;
+  red_mark_detection?: RedMarkDetection | null;
+  user_confirmed_answer?: string | null;
+}
+
+export interface RedMarkDetection {
+  detected_answer: string | null;
+  confidence: number;
+  status: "detected" | "uncertain" | "not_found";
+  page_number: number;
+  mark_coordinates: number[] | null;
+  user_confirmed_answer?: string | null;
+  cached?: boolean;
 }
 
 // -- Subject & Exam --
@@ -85,6 +102,19 @@ export interface Exam {
   title: string;
   question_count: number;
   questions: Question[];
+  source_file?: string | null;
+  uploaded_at?: string | null;
+  has_source_pdf?: boolean;
+}
+
+export interface ProcessedExamSummary {
+  id: string;
+  name: string;
+  subject?: string | null;
+  source_file?: string | null;
+  uploaded_at: string;
+  has_source_pdf: boolean;
+  question_count: number;
 }
 
 // -- API Response Wrapper --

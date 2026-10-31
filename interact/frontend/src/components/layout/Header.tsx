@@ -17,7 +17,13 @@ export function Header() {
           to="/stats"
           className="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
         >
-          Statistics
+          Thống kê
+        </Link>
+        <Link
+          to="/history"
+          className="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)] transition-colors"
+        >
+          Lịch sử PDF
         </Link>
         <DarkModeToggle />
       </div>

@@ -47,7 +47,9 @@ export function McpQuestion({ question }: McpQuestionProps) {
 
         // After submit logic
         if (state.is_submitted) {
-          const isCorrectAnswer = question.option_answer?.includes(opt.label);
+          const isCorrectAnswer = (question.user_confirmed_answer
+            ? [question.user_confirmed_answer]
+            : question.option_answer || []).includes(opt.label);
           
           if (isCorrectAnswer) {
             stateClass = "border-[var(--color-success)] bg-[var(--color-success-light)] dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300";

@@ -4,16 +4,16 @@ import { StatsService } from "../services/stats";
 import type { QuizStats, QuestionType } from "../types/types";
 
 const questionTypeLabels: Record<QuestionType, string> = {
-  mcp: "Multiple Choice",
-  true_false_ng: "True / False",
-  matching: "Matching",
-  fill_in: "Fill-in",
+  mcp: "Trắc nghiệm",
+  true_false_ng: "Đúng / Sai / Không có thông tin",
+  matching: "Nối đáp án",
+  fill_in: "Điền vào chỗ trống",
 };
 
 function formatTime(seconds: number) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
-  return `${hours > 0 ? `${hours}h ` : ""}${mins}m` || "0m";
+  return `${hours > 0 ? `${hours} giờ ` : ""}${mins} phút` || "0 phút";
 }
 
 function scoreColor(score: number) {
@@ -29,7 +29,7 @@ function badgeTone(score: number) {
 }
 
 function formatDate(timestamp: number) {
-  return new Date(timestamp).toLocaleString("en-US", {
+  return new Date(timestamp).toLocaleString("vi-VN", {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -76,10 +76,10 @@ export function StatsPage() {
     <div className="max-w-7xl mx-auto px-6 py-10 min-h-[calc(100vh-4rem)] text-[var(--color-text)] animate-fade-in">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-8">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Study dashboard</p>
-          <h1 className="mt-3 text-4xl font-semibold text-[var(--color-text)]">Performance insights</h1>
+          <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Tổng quan học tập</p>
+          <h1 className="mt-3 text-4xl font-semibold text-[var(--color-text)]">Phân tích kết quả</h1>
           <p className="mt-2 max-w-2xl text-[var(--color-text-secondary)]">
-            Review your recent quiz history, monitor trends, and identify your strongest and weakest question types.
+            Xem lại lịch sử làm bài, theo dõi tiến độ và nhận biết các dạng câu hỏi bạn làm tốt hoặc cần cải thiện.
           </p>
         </div>
 
@@ -87,31 +87,31 @@ export function StatsPage() {
           to="/"
           className="inline-flex items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-3 text-sm font-semibold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)]"
         >
-          Take another quiz
+          Làm bài trắc nghiệm khác
         </Link>
       </div>
 
       {stats.totalAttempts === 0 ? (
         <div className="rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-12 text-center shadow-[0_25px_120px_-40px_rgba(15,23,42,0.8)]">
           <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-[var(--color-bg-tertiary)]/60 text-3xl">📘</div>
-          <h2 className="text-2xl font-semibold text-[var(--color-text)] mb-2">No quizzes recorded yet</h2>
+          <h2 className="text-2xl font-semibold text-[var(--color-text)] mb-2">Chưa có bài làm nào</h2>
           <p className="text-[var(--color-text-secondary)] mb-6">
-            Start your first quiz to populate this dashboard with scored attempts, progress charts, and learning insights.
+            Hãy bắt đầu bài trắc nghiệm đầu tiên để xem điểm số, biểu đồ tiến độ và thống kê học tập tại đây.
           </p>
           <Link
             to="/"
             className="inline-flex items-center justify-center rounded-full bg-[var(--color-primary)] px-6 py-3 text-sm font-semibold text-[var(--color-primary-foreground)] transition hover:opacity-90"
           >
-            Explore quizzes
+            Khám phá bài trắc nghiệm
           </Link>
         </div>
       ) : (
         <>
           <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr_1fr_1fr]">
             <div className="group rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Total Quizzes Taken</p>
+              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Tổng số bài đã làm</p>
               <p className="mt-4 text-4xl font-semibold text-[var(--color-text)]">{stats.totalAttempts}</p>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Completed quiz attempts since you started learning.</p>
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Số bài trắc nghiệm bạn đã hoàn thành.</p>
             </div>
 
             <div className="group rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.08)] backdrop-blur-xl flex flex-col items-center justify-center">
@@ -125,20 +125,20 @@ export function StatsPage() {
                   <p className="text-3xl font-semibold text-[var(--color-text)]">{stats.avgScore}%</p>
                 </div>
               </div>
-              <p className="mt-5 text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Average Score</p>
-              <p className="mt-3 text-sm text-[var(--color-text-secondary)]">A rolling view of your performance across all attempts.</p>
+              <p className="mt-5 text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Điểm trung bình</p>
+              <p className="mt-3 text-sm text-[var(--color-text-secondary)]">Điểm trung bình trên tất cả các lần làm bài.</p>
             </div>
 
             <div className="group rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Total Study Time</p>
+              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Tổng thời gian học</p>
               <p className="mt-4 text-4xl font-semibold text-[var(--color-text)]">{formatTime(stats.totalTimeSpent)}</p>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Time spent reviewing material across all quizzes.</p>
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Thời gian bạn dành để ôn tập qua các bài trắc nghiệm.</p>
             </div>
 
             <div className="group rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.08)] backdrop-blur-xl">
-              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Correct Answer Ratio</p>
+              <p className="text-sm uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Tỷ lệ trả lời đúng</p>
               <p className="mt-4 text-4xl font-semibold text-[var(--color-text)]">{correctRatio}%</p>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Correct answers out of all questions attempted.</p>
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Tỷ lệ câu trả lời đúng trên tổng số câu đã làm.</p>
             </div>
           </div>
 
@@ -146,10 +146,10 @@ export function StatsPage() {
             <section className="rounded-[2rem] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.08)] backdrop-blur-xl">
               <div className="flex items-center justify-between gap-4 mb-6">
                 <div>
-                  <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Weaknesses & Strengths</p>
-                    <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Performance by question type</h2>
+                  <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Điểm mạnh và điểm cần cải thiện</p>
+                    <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Kết quả theo dạng câu hỏi</h2>
                 </div>
-                <div className="rounded-full border border-[var(--color-border)] px-4 py-2 text-xs uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Sorted by type</div>
+                <div className="rounded-full border border-[var(--color-border)] px-4 py-2 text-xs uppercase tracking-[0.25em] text-[var(--color-text-secondary)]">Phân loại theo dạng câu</div>
               </div>
 
               <div className="space-y-5">
@@ -163,7 +163,7 @@ export function StatsPage() {
                     <div key={type} className="space-y-2">
                       <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
                         <span>{label}</span>
-                        <span>{data.correct}/{data.total} correct</span>
+                        <span>{data.correct}/{data.total} câu đúng</span>
                       </div>
                       <div className="h-3 rounded-full bg-slate-800 overflow-hidden">
                         <div
@@ -171,7 +171,7 @@ export function StatsPage() {
                           style={{ width: `${progress}%`, background: `linear-gradient(90deg, #38bdf8, #22c55e)` }}
                         />
                       </div>
-                      <div className="text-xs text-[var(--color-text-secondary)]">Accuracy {progress}%</div>
+                      <div className="text-xs text-[var(--color-text-secondary)]">Độ chính xác {progress}%</div>
                     </div>
                   );
                 })}
@@ -179,8 +179,8 @@ export function StatsPage() {
             </section>
 
             <section className="rounded-[2rem] border border-slate-800 bg-white/5 p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.8)] backdrop-blur-xl">
-              <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Score Progression</p>
-              <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Trend over time</h2>
+              <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Diễn biến điểm số</p>
+              <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Tiến độ theo thời gian</h2>
               <div className="mt-7 overflow-x-auto">
                 <div className="relative min-w-[400px] rounded-3xl border border-[var(--color-border)] bg-[var(--color-bg-tertiary)]/40 p-5">
                   <svg viewBox={`0 0 ${120 * Math.max(scoreProgress.length, 2)} 140`} className="w-full h-44">
@@ -222,7 +222,7 @@ export function StatsPage() {
                         }}
                         className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-sm font-semibold text-[var(--color-primary-foreground)]"
                       >
-                        Expand
+                        Mở rộng
                       </button>
                     </div>
               </div>
@@ -232,21 +232,21 @@ export function StatsPage() {
           <section className="mt-10 rounded-[2rem] border border-slate-800 bg-white/5 p-6 shadow-[0_20px_80px_-60px_rgba(15,23,42,0.8)] backdrop-blur-xl">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-6">
               <div>
-                <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Attempt History</p>
-                <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Chronological log</h2>
+                <p className="text-sm uppercase tracking-[0.3em] text-[var(--color-text-secondary)]">Lịch sử làm bài</p>
+                <h2 className="mt-3 text-2xl font-semibold text-[var(--color-text)]">Các lần làm bài gần đây</h2>
               </div>
-              <p className="text-sm text-[var(--color-text-secondary)]">Most recent attempts appear first.</p>
+              <p className="text-sm text-[var(--color-text-secondary)]">Bài làm gần nhất được hiển thị trước.</p>
             </div>
 
             <div className="overflow-hidden rounded-3xl border border-[var(--color-border)] bg-[var(--color-surface)]">
               <table className="min-w-full text-left text-sm text-[var(--color-text-muted)]">
                 <thead className="border-b border-[var(--color-border)] bg-[var(--color-bg-tertiary)]/90 text-[var(--color-text-secondary)]">
                   <tr>
-                    <th className="px-6 py-4">Subject</th>
-                    <th className="px-6 py-4">Quiz</th>
-                    <th className="px-6 py-4">Score</th>
-                    <th className="px-6 py-4">Time</th>
-                    <th className="px-6 py-4">Date</th>
+                    <th className="px-6 py-4">Môn học</th>
+                    <th className="px-6 py-4">Bài trắc nghiệm</th>
+                    <th className="px-6 py-4">Điểm</th>
+                    <th className="px-6 py-4">Thời gian</th>
+                    <th className="px-6 py-4">Ngày làm</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -301,10 +301,10 @@ export function StatsPage() {
               <div className="relative max-w-[90vw] w-full max-h-[90vh] overflow-auto rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] p-6">
                 <div className="flex items-start justify-between gap-4 mb-4">
                   <div>
-                    <h3 className="text-lg font-semibold text-[var(--color-text)]">Score Progression</h3>
-                    <p className="text-sm text-[var(--color-text-secondary)]">Hover points to see attempt overview. Click a point to review the attempt.</p>
+                    <h3 className="text-lg font-semibold text-[var(--color-text)]">Diễn biến điểm số</h3>
+                    <p className="text-sm text-[var(--color-text-secondary)]">Di chuột lên điểm để xem thông tin bài làm. Nhấn vào điểm để xem lại bài.</p>
                   </div>
-                  <button onClick={() => setModalOpen(false)} className="px-3 py-1 rounded-md bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]">Close</button>
+                  <button onClick={() => setModalOpen(false)} className="px-3 py-1 rounded-md bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)]">Đóng</button>
                 </div>
 
                 <div className="mb-6 overflow-x-auto relative">
@@ -390,10 +390,10 @@ export function StatsPage() {
         <div className="fixed inset-0 z-70 flex items-center justify-center p-6">
           <div className="absolute inset-0 bg-black/40" onClick={() => setDevPopup({ open: false, attemptId: null })} />
           <div className="relative z-80 max-w-sm w-full rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] p-6">
-            <h3 className="text-lg font-semibold text-[var(--color-text)]">This function is in development</h3>
-            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">The review feature is currently under development. It will support detailed review in the next update.</p>
+            <h3 className="text-lg font-semibold text-[var(--color-text)]">Tính năng đang được phát triển</h3>
+            <p className="mt-2 text-sm text-[var(--color-text-secondary)]">Chức năng xem lại chi tiết đang được hoàn thiện và sẽ có trong bản cập nhật tiếp theo.</p>
             <div className="mt-4 flex justify-end">
-              <button onClick={() => setDevPopup({ open: false, attemptId: null })} className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-sm font-semibold text-[var(--color-primary-foreground)]">Close</button>
+              <button onClick={() => setDevPopup({ open: false, attemptId: null })} className="rounded-full bg-[var(--color-primary)] px-4 py-2 text-sm font-semibold text-[var(--color-primary-foreground)]">Đóng</button>
             </div>
           </div>
         </div>
