@@ -185,4 +185,5 @@ def recognize_pdf(path: str, model: str) -> tuple[str, dict[str, Any]]:
                 })
 
     raw = {"job_id": job_id, "data_info": data_info, "pages": pages}
-    return "\n\n".join(_text_from(page) for page in pages if _text_from(page)), raw
+    page_texts = [text for page in pages for text in _text_from(page)]
+    return "\n\n".join(page_texts), raw
