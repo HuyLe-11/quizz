@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parent
 load_dotenv(BACKEND_DIR / ".env")
 DATA_DIR = BACKEND_DIR / "data"
+if os.getenv("VERCEL"):
+    # Vercel Functions can only write to temporary storage; this is suitable
+    # for a deployment smoke test, not persistent quiz history or PDF assets.
+    DATA_DIR = Path("/tmp/quizpdf")
 DATABASE_PATH = Path(os.getenv("DATABASE_PATH", DATA_DIR / "quiz.sqlite3"))
 STORAGE_DIR = Path(os.getenv("STORAGE_DIR", DATA_DIR / "storage"))
 ASSETS_DIR = STORAGE_DIR / "assets"

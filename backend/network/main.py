@@ -19,10 +19,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import db
-from backend.engine.paddle_client import extract_page_texts, recognize_pdf
-from backend.engine.pdf_tools import RedMarkConfig, crop_question_pdf, detect_red_mark_pdf
-from backend.engine.quiz_parser import parse_questions, parse_questions_by_pages
+try:
+    # Repository-root imports used by local development and Render.
+    from backend import db
+    from backend.engine.paddle_client import extract_page_texts, recognize_pdf
+    from backend.engine.pdf_tools import RedMarkConfig, crop_question_pdf, detect_red_mark_pdf
+    from backend.engine.quiz_parser import parse_questions, parse_questions_by_pages
+except ModuleNotFoundError as exc:
+    # Vercel runs this service with `backend/` as its import root.
+    if exc.name != "backend":
+        raise
+    import db
+    from engine.paddle_client import extract_page_texts, recognize_pdf
+    from engine.pdf_tools import RedMarkConfig, crop_question_pdf, detect_red_mark_pdf
+    from engine.quiz_parser import parse_questions, parse_questions_by_pages
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 MAX_PDF_BYTES = 30 * 1024 * 1024
@@ -32,9 +42,21 @@ logger = logging.getLogger("quizpdf")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    logger.info("phase=startup_database status=started")
+    logger.info(
+        "phase=startup_database status=started database_path=%s storage_path=%s",
+        db.DATABASE_PATH, db.STORAGE_DIR,
+    )
     try:
         db.initialize_database()
+    except PermissionError as exc:
+        logger.exception(
+            "phase=startup_database status=failed reason=storage_not_writable database_path=%s storage_path=%s",
+            db.DATABASE_PATH, db.STORAGE_DIR,
+        )
+        raise RuntimeError(
+            "Không thể ghi vào thư mục SQLite/storage. Kiểm tra DATABASE_PATH và STORAGE_DIR; "
+            "Render cần Persistent Disk, còn Vercel chỉ hỗ trợ filesystem tạm trong /tmp."
+        ) from exc
     except Exception:
         logger.exception("phase=startup_database status=failed")
         raise
@@ -49,7 +71,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Content-Type"],
 )
-db.ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/api/assets", StaticFiles(directory=str(db.ASSETS_DIR), check_dir=False), name="assets")
 
 

@@ -1,7 +1,7 @@
 /**
  * API service layer for communicating with the FastAPI backend.
  *
- * Base URL: http://localhost:8000/api
+ * Base URL: same-origin /api in production, localhost in development.
  *
  * Each function documents the expected backend endpoint, method,
  * request/response format to make backend implementation straightforward.
@@ -9,7 +9,8 @@
 
 import type { ApiResponse, Exam, ProcessedExamSummary, RedMarkDetection, Subject, UploadResponse } from "../types/types";
 
-const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000")
+const configuredApiOrigin = import.meta.env.VITE_API_BASE_URL?.trim();
+const API_ORIGIN = (configuredApiOrigin || (import.meta.env.DEV ? "http://localhost:8000" : ""))
   .replace(/\/+$/, "")
   .replace(/\/api$/i, "");
 const API_BASE_URL = `${API_ORIGIN}/api`;

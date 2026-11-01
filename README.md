@@ -75,8 +75,44 @@ Tất cả nội dung câu hỏi, mô tả, giải thích đều hỗ trợ: vă
 ### 3.3. Dịch Vụ Phân Tích & Lưu Trữ (Stats Engine)
 - File `interact/frontend/src/services/stats.ts`:
   - `checkQuestionCorrectness`: Thuật toán tự động chấm điểm cả 4 loại câu hỏi.
-  - `StatsService`: Quản lý lưu trữ attempt logs và tổng hợp số liệu phân tích.
-  - Đã có tài liệu hướng dẫn cụ thể về việc chuyển đổi sang FastAPI + PostgreSQL trong code comment.
+  - `StatsService`: Lưu lượt làm và tổng hợp thống kê trên trình duyệt bằng `localStorage`.
+  - Với đề PDF đã lưu trong backend, `QuizContext` cũng gửi lượt làm đến API để ghi vào SQLite.
+
+### 3.4. Luồng từ lúc tải PDF đến khi làm bài
+
+```mermaid
+flowchart TD
+    A[Người dùng chọn PDF và mô hình OCR] --> B[Frontend gửi multipart POST /api/upload]
+    B --> C[Backend kiểm tra PDF, dung lượng và mô hình]
+    C --> D[PaddleOCR xử lý tài liệu theo trang]
+    D --> E[Parser tách câu hỏi, lựa chọn và số trang]
+    E --> F[Giữ số câu gốc, gán ID duy nhất cho dữ liệu]
+    F --> G{Nội dung parse thiếu hoặc chưa tin cậy?}
+    G -- Có --> H[PyMuPDF crop câu hỏi; OCR bbox làm fallback]
+    G -- Không --> I[Cho phép tạo ảnh crop sau từ thẻ câu hỏi]
+    H --> J[Lưu PDF, OCR và câu hỏi vào file storage và SQLite]
+    I --> J
+    J --> K[Frontend chuyển đến /quiz/{exam_id}]
+    K --> L[GET /api/exams/{exam_id} và hiển thị Question Card]
+    L --> M[Người dùng chọn, sửa câu trả lời và chuyển câu]
+    M --> N{Nộp bài?}
+    N -- Chưa --> M
+    N -- Nộp --> O[Chấm ở frontend và hiển thị kết quả]
+    O --> P[Lưu thống kê trình duyệt và lượt làm SQLite]
+    P --> Q[Lịch sử PDF cho phép xem lại hoặc làm lại]
+```
+
+**Chi tiết các bước:**
+
+1. Ở trang chủ, người dùng chọn PDF và mô hình `PaddleOCR-VL-1.6` hoặc `PP-OCRv6`. Frontend gửi tệp bằng `multipart/form-data` tới `POST /api/upload`; token PaddleOCR chỉ nằm ở backend.
+2. Backend kiểm tra định dạng PDF, dung lượng tối đa 30 MB và mô hình được phép dùng, rồi gọi PaddleOCR. VL phù hợp hơn với tài liệu có bố cục, bảng và công thức; PP-OCRv6 tập trung nhận dạng văn bản.
+3. Parser xử lý nội dung theo trang, tách câu hỏi đánh số và các lựa chọn A–H. Hệ thống lưu trang nguồn và số thứ tự câu gốc. Nếu PDF lặp số câu giữa các trang, backend vẫn giữ số gốc để định vị trên PDF và cấp ID câu nội bộ không trùng trong đề.
+4. Câu hỏi thiếu nội dung hoặc thiếu cấu trúc được crop tự động bằng PyMuPDF. Nếu PDF không có text layer phù hợp, crop có thể dùng bounding box OCR; nếu ranh giới không rõ, hệ thống giữ fallback rộng hơn. Với câu đã parse đầy đủ, người dùng vẫn có thể tạo crop từ công cụ trong thẻ câu hỏi.
+5. Backend lưu PDF gốc và ảnh crop trong `STORAGE_DIR`; thông tin đề, câu hỏi, lựa chọn, dữ liệu OCR và metadata ảnh được lưu trong SQLite. Khi lưu thành công, frontend chuyển sang `/quiz/{exam_id}` và lấy câu hỏi qua `GET /api/exams/{exam_id}`.
+6. Trong Question Card, người dùng có thể đổi lựa chọn trắc nghiệm, chỉnh câu trả lời điền, hoặc sửa nối đáp án trước khi nộp. Thanh tiến độ và lưới điều hướng cho phép quay lại câu trước để chỉnh. Sau khi nộp, các ô trả lời bị khóa và giao diện hiển thị kết quả/đáp án theo dữ liệu hiện có.
+7. Kết quả lần làm được lưu vào thống kê trong `localStorage`; với đề PDF đã xử lý, frontend đồng thời gửi lượt làm tới `POST /api/exams/{exam_id}/attempts` để lưu trong SQLite. Trang **Lịch sử PDF** gọi `GET /api/exams`, cho phép xem lại câu hỏi hoặc bắt đầu một lượt làm mới.
+
+**Giới hạn chấm điểm hiện tại:** parser OCR chỉ tạo câu hỏi trắc nghiệm `mcp` hoặc điền `fill_in`; giao diện có hỗ trợ thêm đúng/sai và nối đáp án nhưng parser PDF chưa tự chuyển các dạng đó. Parser cũng không tự suy đoán đáp án đúng: lựa chọn OCR được lưu `is_correct = false`, câu điền chưa có danh sách đáp án chấp nhận. Vì vậy điểm tự chấm chỉ có ý nghĩa khi đề có đáp án phù hợp. Với câu trắc nghiệm, có thể bật nhận diện dấu đỏ trên từng câu rồi xác nhận đáp án; đáp án xác nhận được dùng riêng khi chấm, không ghi đè dữ liệu gốc. Hiện chưa có màn hình rà soát toàn bộ nội dung OCR trước khi bắt đầu làm bài.
 
 ---
 
@@ -97,19 +133,18 @@ Tất cả nội dung câu hỏi, mô tả, giải thích đều hỗ trợ: vă
 
 ### Backend
 - [x] Thiết lập FastAPI app trong `backend/network/main.py`.
-- [x] Nhận PDF, gọi PaddleOCR official API từ backend và lưu quiz vào SQLite.
+- [x] Nhận PDF, gọi PaddleOCR API từ backend và lưu quiz, OCR, lượt làm vào SQLite.
 - [x] Lịch sử đề đã xử lý, xem lại đề, ghi nhận lượt làm.
 - [x] Crop ảnh câu hỏi bằng PyMuPDF và nhận diện dấu đỏ theo câu bằng OpenCV.
 - [x] Đọc đề đã tạo qua `GET /api/exams/:examId` theo contract frontend.
-- [ ] Thay JSON file store bằng PostgreSQL theo `schema1.sql` khi triển khai production.
+- [x] Nhập dữ liệu từ `generated_exams.json` một lần vào SQLite khi khởi động.
+- [ ] Chuyển SQLite sang dịch vụ database phù hợp nếu cần nhiều instance/ghi đồng thời.
 - [ ] Bổ sung màn hình rà soát/chỉnh sửa câu hỏi và đáp án OCR trước khi xuất bản.
 - [ ] Viết API Endpoints:
   - `GET /api/subjects` (Danh sách môn)
   - `GET /api/subjects/:id/exams` (Danh sách đề theo môn)
-  - `GET /api/exams/:id` (Chi tiết đề & câu hỏi)
   - `POST /api/exams/:id/submit` (Chấm điểm server-side)
-  - `POST /api/upload` (đã có; upload PDF & kích hoạt OCR)
-  - `GET /api/attempts` & `GET /api/attempts/stats` (Truy vấn lịch sử thi)
+  - `GET /api/attempts/stats` (Thống kê lượt làm từ backend)
 - [x] Tích hợp PaddleOCR API adapter và parser câu hỏi cơ bản trong `backend/engine/`.
 
 ### Chạy backend OCR
@@ -139,7 +174,7 @@ Frontend mặc định gọi `http://localhost:8000/api`. Có thể cấu hình 
 
 Mặc định upload dùng `PaddleOCR-VL-1.6` để phân tích bố cục tài liệu, công thức, bảng và trả kết quả Markdown theo trang; có thể chọn `PP-OCRv6` khi ưu tiên nhận dạng văn bản nhanh. PP-OCRv6 là pipeline OCR text detection/recognition, không thay thế phân tích cấu trúc tài liệu của VL. PaddleOCR official API SDK hỗ trợ `parse_document(file_path=..., model="PaddleOCR-VL-1.6")` và `ocr(file_path=..., model="PP-OCRv6")`; kết quả document parsing có `pages`/`markdownText` hoặc `markdown.text`, còn OCR có dữ liệu theo trang. Adapter giữ response gốc trong `exams[].extra.ocr_response` và markdown trong `exams[].extra.ocr_markdown` để tiện kiểm tra.
 
-Parser hiện nhận dạng câu hỏi đánh số (ví dụ `Câu 1`, `Question 1`, `1.`) và đáp án lựa chọn A–H. Nó không suy đoán đáp án đúng; do đó `is_correct` sẽ là `false` cho tới khi bổ sung answer key hoặc người dùng hiệu chỉnh. Các câu không có lựa chọn được lưu tạm thành `fill_in`.
+Parser hiện nhận dạng câu hỏi đánh số (ví dụ `Câu 1`, `Question 1`, `1.`) và đáp án lựa chọn A–H. Nó không suy đoán đáp án đúng; lựa chọn OCR được lưu với `is_correct = false` cho tới khi người dùng xác nhận đáp án bằng công cụ nhận diện dấu đỏ. Các câu không có lựa chọn được lưu tạm thành `fill_in`.
 
 ### SQLite, lịch sử và triển khai demo trên Render
 
@@ -189,3 +224,11 @@ Khi tiếp tục phát triển dự án này:
    ```
 4. **Backend FastAPI Integration**:
    - Tham khảo các ghi chú chi tiết trong `interact/frontend/src/services/api.ts` và `interact/frontend/src/services/stats.ts` để triển khai đúng format REST API mà Frontend mong đợi.
+
+### Triển khai thử trên Vercel Services
+
+Repository có `vercel.json` với hai service: `backend` (FastAPI, thư mục `backend`) và `frontend` (Vite, thư mục `interact/frontend`). Rewrite public chuyển `/api/*` đến backend và các đường dẫn còn lại đến frontend. Frontend production gọi API tương đối qua `/api`; khi chạy local vẫn dùng `http://localhost:8000`. Không có service binding vì frontend là static app chạy trong trình duyệt và gọi API qua public rewrite.
+
+Trong Vercel, chọn framework **Services** (tính năng đang ở Private Beta, cần quyền truy cập) và đặt biến môi trường backend `PADDLEOCR_ACCESS_TOKEN`. Không đặt token trong frontend hay trong `vercel.json`. Để `VITE_API_BASE_URL` trống khi frontend/backend dùng chung domain.
+
+Đây mới là cấu hình demo, chưa phù hợp để lưu dữ liệu bền vững hoặc nhận PDF lớn: Vercel Function giới hạn body request/response 4.5 MB, dù ứng dụng hiện cho phép file đến 30 MB. Trên Vercel, ứng dụng dùng `/tmp/quizpdf` để tránh ghi vào filesystem chỉ đọc; dữ liệu ở đó tạm thời, có thể mất và không được chia sẻ giữa các instance. Muốn dùng ổn định cần chuyển database sang dịch vụ SQL và file sang object storage; để nhận PDF lớn cần upload trực tiếp từ trình duyệt lên object storage rồi gửi đường dẫn cho backend. Thời gian OCR cũng phải nằm trong giới hạn Function của plan. Xem [giới hạn Function](https://vercel.com/docs/functions/limitations), [upload file lớn](https://vercel.com/docs/vercel-blob/server-upload) và [Vercel Services](https://vercel.com/docs/services).
