@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 try:
     # Repository-root imports used by local development and Render.
     from backend import db
-    from backend.engine.paddle_client import extract_page_texts, recognize_pdf
+    from backend.engine.paddle_client import PaddleOCRAPIError, PaddleOCRTimeoutError, extract_page_texts, recognize_pdf
     from backend.engine.pdf_tools import RedMarkConfig, crop_question_pdf, detect_red_mark_pdf
     from backend.engine.quiz_parser import parse_questions, parse_questions_by_pages
 except ModuleNotFoundError as exc:
@@ -30,7 +30,7 @@ except ModuleNotFoundError as exc:
     if exc.name != "backend":
         raise
     import db
-    from engine.paddle_client import extract_page_texts, recognize_pdf
+    from engine.paddle_client import PaddleOCRAPIError, PaddleOCRTimeoutError, extract_page_texts, recognize_pdf
     from engine.pdf_tools import RedMarkConfig, crop_question_pdf, detect_red_mark_pdf
     from engine.quiz_parser import parse_questions, parse_questions_by_pages
 
@@ -203,6 +203,16 @@ async def upload_pdf(file: UploadFile = File(...), model: str = Form("PaddleOCR-
         logger.exception("upload=%s phase=ocr status=failed", exam_id)
         if "PADDLEOCR_ACCESS_TOKEN" in str(exc):
             raise HTTPException(503, "PaddleOCR chưa được cấu hình. Hãy đặt PADDLEOCR_ACCESS_TOKEN trong backend/.env.") from exc
+        if isinstance(exc, PaddleOCRAPIError):
+            raise HTTPException(
+                502,
+                f"PaddleOCR API trả HTTP {exc.status_code} ở bước {exc.stage}. Kiểm tra token và log Runtime của backend.",
+            ) from exc
+        if isinstance(exc, PaddleOCRTimeoutError):
+            raise HTTPException(
+                504,
+                "PaddleOCR xử lý quá thời gian chờ của ứng dụng. Hãy thử PDF ngắn hơn hoặc chọn PP-OCRv6.",
+            ) from exc
         raise HTTPException(502, f"Không thể xử lý PDF bằng PaddleOCR ({type(exc).__name__}). Hãy kiểm tra cấu hình API và log backend.") from exc
     finally:
         if tmp_path and os.path.exists(tmp_path):

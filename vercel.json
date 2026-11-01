@@ -4,7 +4,12 @@
     "backend": {
       "root": "backend",
       "framework": "fastapi",
-      "entrypoint": "index.py"
+      "entrypoint": "index.py",
+      "functions": {
+        "index.py": {
+          "maxDuration": 110
+        }
+      }
     },
     "frontend": {
       "root": "interact/frontend",

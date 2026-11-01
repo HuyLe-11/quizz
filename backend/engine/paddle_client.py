@@ -9,6 +9,23 @@ from typing import Any
 import requests
 
 
+class PaddleOCRAPIError(RuntimeError):
+    def __init__(self, stage: str, status_code: int):
+        self.stage = stage
+        self.status_code = status_code
+        super().__init__(f"PaddleOCR {stage} request returned HTTP {status_code}.")
+
+
+class PaddleOCRTimeoutError(TimeoutError):
+    pass
+
+
+def _check_response(response: requests.Response, stage: str) -> None:
+    if response.ok:
+        return
+    raise PaddleOCRAPIError(stage, response.status_code)
+
+
 def _text_from(value: Any) -> list[str]:
     """Extract page text from PaddleOCR response variants."""
     result: list[str] = []
@@ -71,20 +88,26 @@ def recognize_pdf(path: str, model: str) -> tuple[str, dict[str, Any]]:
         base_url = os.getenv("PADDLEOCR_BASE_URL", "https://paddleocr.aistudio-app.com").rstrip("/")
         job_url = f"{base_url}/api/v2/ocr/jobs"
 
-    timeout = float(os.getenv("PADDLEOCR_REQUEST_TIMEOUT", "45"))
-    poll_timeout = float(os.getenv("PADDLEOCR_POLL_TIMEOUT", "240"))
+    # Reserve time for request upload and parsing within the Vercel invocation.
+    timeout = float(os.getenv("PADDLEOCR_REQUEST_TIMEOUT", "20"))
+    poll_timeout = float(os.getenv("PADDLEOCR_POLL_TIMEOUT", "75"))
     headers = {"Authorization": f"Bearer {token}"}
     optional_payload = json.dumps({})
 
-    with open(path, "rb") as pdf_file:
-        response = requests.post(
-            job_url,
-            headers=headers,
-            data={"model": model, "optionalPayload": optional_payload},
-            files={"file": (Path(path).name, pdf_file, "application/pdf")},
-            timeout=timeout,
-        )
-    response.raise_for_status()
+    try:
+        with open(path, "rb") as pdf_file:
+            response = requests.post(
+                job_url,
+                headers=headers,
+                data={"model": model, "optionalPayload": optional_payload},
+                files={"file": (Path(path).name, pdf_file, "application/pdf")},
+                timeout=timeout,
+            )
+    except requests.Timeout as exc:
+        raise PaddleOCRTimeoutError("Timed out submitting PDF to PaddleOCR.") from exc
+    except requests.RequestException as exc:
+        raise RuntimeError("Could not connect to PaddleOCR API while submitting PDF.") from exc
+    _check_response(response, "submit")
     submitted = response.json()
     data = submitted.get("data") if isinstance(submitted, dict) else None
     job_id = data.get("jobId") if isinstance(data, dict) else None
@@ -94,8 +117,13 @@ def recognize_pdf(path: str, model: str) -> tuple[str, dict[str, Any]]:
     deadline = time.monotonic() + poll_timeout
     interval = 3.0
     while True:
-        status_response = requests.get(f"{job_url.rstrip('/')}/{job_id}", headers=headers, timeout=timeout)
-        status_response.raise_for_status()
+        try:
+            status_response = requests.get(f"{job_url.rstrip('/')}/{job_id}", headers=headers, timeout=timeout)
+        except requests.Timeout as exc:
+            raise PaddleOCRTimeoutError("Timed out checking PaddleOCR job status.") from exc
+        except requests.RequestException as exc:
+            raise RuntimeError("Could not connect to PaddleOCR API while checking job status.") from exc
+        _check_response(status_response, "status")
         status_payload = status_response.json()
         status = status_payload.get("data") if isinstance(status_payload, dict) else None
         if not isinstance(status, dict):
@@ -106,8 +134,13 @@ def recognize_pdf(path: str, model: str) -> tuple[str, dict[str, Any]]:
             json_url = result_url.get("jsonUrl") if isinstance(result_url, dict) else None
             if not json_url:
                 raise RuntimeError("PaddleOCR completed without a result URL.")
-            result_response = requests.get(json_url, timeout=timeout)
-            result_response.raise_for_status()
+            try:
+                result_response = requests.get(json_url, timeout=timeout)
+            except requests.Timeout as exc:
+                raise PaddleOCRTimeoutError("Timed out downloading PaddleOCR result.") from exc
+            except requests.RequestException as exc:
+                raise RuntimeError("Could not download PaddleOCR result.") from exc
+            _check_response(result_response, "result download")
             try:
                 result_lines = [json.loads(line) for line in result_response.text.splitlines() if line.strip()]
             except json.JSONDecodeError as exc:
@@ -119,7 +152,7 @@ def recognize_pdf(path: str, model: str) -> tuple[str, dict[str, Any]]:
             raise RuntimeError(f"PaddleOCR returned an unknown job state: {state!r}")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError(f"Timed out waiting for PaddleOCR job {job_id}.")
+            raise PaddleOCRTimeoutError(f"Timed out waiting for PaddleOCR job {job_id}.")
         time.sleep(min(interval, remaining))
         interval = min(interval * 1.5, 15.0)
 
