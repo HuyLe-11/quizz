@@ -1,0 +1,45 @@
+# Python generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+.venv/
+venv/
+
+# IDE configuration
+.idea/
+.vscode/
+*.iml
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Frontend generated files
+node_modules/
+dist/
+*.tsbuildinfo
+
+# SQLite runtime
+/backend/data/quiz.sqlite3
+/backend/data/quiz.sqlite3-wal
+/backend/data/quiz.sqlite3-shm
+/backend/data/quiz.sqlite3-journal
+
+# Uploaded PDFs and generated images
+/backend/data/storage/
+
+# Logs
+*.log
+
+# Operating system files
+.DS_Store
+Thumbs.db
