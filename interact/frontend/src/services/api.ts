@@ -1,194 +1,448 @@
 /**
  * API service layer for communicating with the FastAPI backend.
- *
- * Base URL: same-origin /api in production, localhost in development.
- *
- * Each function documents the expected backend endpoint, method,
- * request/response format to make backend implementation straightforward.
+ * Supports legacy uploads and asynchronous PDF processing jobs.
  */
 
-import type { ApiResponse, Exam, ProcessedExamSummary, RedMarkDetection, Subject, UploadResponse } from "../types/types";
+import type {
+    ApiResponse,
+    Exam,
+    ProcessedExamSummary,
+    RedMarkDetection,
+    Subject,
+    UploadResponse,
+    UploadJob,
+} from "../types/types";
 
-const configuredApiOrigin = import.meta.env.VITE_API_BASE_URL?.trim();
-const API_ORIGIN = (configuredApiOrigin || (import.meta.env.DEV ? "http://localhost:8000" : ""))
-  .replace(/\/+$/, "")
-  .replace(/\/api$/i, "");
+const configuredApiOrigin =
+    import.meta.env.VITE_API_BASE_URL?.trim();
+
+const API_ORIGIN = (
+    configuredApiOrigin ||
+    (import.meta.env.DEV ? "http://localhost:8000" : "")
+)
+    .replace(/\/+$/, "")
+    .replace(/\/api$/i, "");
+
 const API_BASE_URL = `${API_ORIGIN}/api`;
 
-export function resolveApiUrl(path: string | null | undefined): string | null {
-  if (!path) return null;
-  return path.startsWith("http") ? path : `${API_ORIGIN}${path}`;
+const REQUEST_TIMEOUT_MS = 20_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+const POLLING_INTERVAL_MS = 2_000;
+const MAX_POLLING_TIME_MS = 600_000;
+
+export function resolveApiUrl(
+    path: string | null | undefined,
+): string | null {
+    if (!path) return null;
+
+    return path.startsWith("http")
+        ? path
+        : `${API_ORIGIN}${path}`;
 }
 
-// -- Helper --
+// Generic API request handling.
 
-/**
- * Generic fetch wrapper with error handling.
- * Parses JSON response and extracts data from ApiResponse wrapper.
- */
 async function fetchApi<T>(
-  endpoint: string,
-  options?: RequestInit
+    endpoint: string,
+    options?: RequestInit,
+    timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
-  const headers = new Headers(options?.headers);
-  if (options?.body != null && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      ...options,
-      headers,
-      signal: options?.signal ?? AbortSignal.timeout(20000),
-    });
-  } catch (requestError) {
-    if (requestError instanceof DOMException && requestError.name === "TimeoutError") {
-      throw new Error("Máy chủ phản hồi quá lâu. Hãy kiểm tra backend rồi thử lại.");
+    const headers = new Headers(options?.headers);
+
+    if (
+        options?.body != null &&
+        !(options.body instanceof FormData) &&
+        !headers.has("Content-Type")
+    ) {
+        headers.set("Content-Type", "application/json");
     }
-    throw new Error("Không thể kết nối máy chủ. Hãy kiểm tra backend và cấu hình địa chỉ API.");
-  }
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || error.detail || `Máy chủ gặp lỗi (${response.status}).`);
-  }
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
 
-  const result: ApiResponse<T> = await response.json();
+    const signal = options?.signal
+        ? AbortSignal.any([
+            options.signal,
+            timeoutSignal,
+        ])
+        : timeoutSignal;
 
-  if (!result.success) {
-    throw new Error(result.message || "Đã xảy ra lỗi khi gọi API.");
-  }
+    try {
+        const response = await fetch(
+            `${API_BASE_URL}${endpoint}`,
+            {
+                ...options,
+                headers,
+                signal,
+            },
+        );
 
-  return result.data;
+        const payload = await response.json().catch((error) => {
+            if (signal.aborted) {
+                throw error;
+            }
+
+            return null;
+        });
+
+        if (!response.ok) {
+            const message =
+                typeof payload?.detail === "string"
+                    ? payload.detail
+                    : typeof payload?.message === "string"
+                        ? payload.message
+                        : `Máy chủ gặp lỗi (${response.status}).`;
+
+            throw new Error(message);
+        }
+
+        if (
+            !payload ||
+            typeof payload !== "object"
+        ) {
+            throw new Error(
+                "Máy chủ trả về dữ liệu không hợp lệ.",
+            );
+        }
+
+        const result = payload as ApiResponse<T>;
+
+        if (!result.success) {
+            throw new Error(
+                result.message ||
+                "Đã xảy ra lỗi khi gọi API.",
+            );
+        }
+
+        return result.data;
+    } catch (error) {
+        if (options?.signal?.aborted) {
+            throw error;
+        }
+
+        if (timeoutSignal.aborted) {
+            throw new Error(
+                "Máy chủ phản hồi quá lâu. " +
+                "Hãy kiểm tra kết nối và backend.",
+                { cause: error },
+            );
+        }
+
+        if (error instanceof TypeError) {
+            throw new Error(
+                "Không thể kết nối máy chủ. " +
+                "Hãy kiểm tra backend và địa chỉ API.",
+                { cause: error },
+            );
+        }
+
+        throw error;
+    }
 }
 
-// -- Subject Endpoints --
+// Subject endpoints.
 
-/**
- * Fetch all available subjects.
- *
- * Backend endpoint: GET /api/subjects
- * Response: ApiResponse<Subject[]>
- * Example response:
- * {
- *   "success": true,
- *   "data": [
- *     { "id": "net101", "name": "Computer Networks", "description": "...", "exam_count": 5 }
- *   ]
- * }
- */
 export async function getSubjects(): Promise<Subject[]> {
-  return fetchApi<Subject[]>("/subjects");
+    return fetchApi<Subject[]>("/subjects");
+}
+
+export async function getExamsBySubject(
+    subjectId: string,
+): Promise<Exam[]> {
+    return fetchApi<Exam[]>(
+        `/subjects/${subjectId}/exams`,
+    );
+}
+
+// Exam endpoints.
+
+export async function getExam(
+    examId: string,
+): Promise<Exam> {
+    const exam = await fetchApi<Exam>(
+        `/exams/${examId}`,
+    );
+
+    return {
+        ...exam,
+        questions: exam.questions.map((question) => ({
+            ...question,
+            question_image_url: resolveApiUrl(
+                question.question_image_url,
+            ),
+        })),
+    };
+}
+
+export async function getProcessedExams(): Promise<
+    ProcessedExamSummary[]
+> {
+    return fetchApi<ProcessedExamSummary[]>(
+        "/exams",
+    );
+}
+
+// Question image and red-mark detection endpoints.
+
+export async function cropQuestionImage(
+    questionRecordId: string,
+    force = false,
+) {
+    const result = await fetchApi<{
+        image_url: string;
+        crop_status: string;
+        page_number: number;
+        source: string;
+        cached: boolean;
+    }>(
+        `/questions/${questionRecordId}/crop-image?force=${force}`,
+        {
+            method: "POST",
+        },
+    );
+
+    return {
+        ...result,
+        image_url:
+            resolveApiUrl(result.image_url) || "",
+    };
+}
+
+export async function detectRedMark(
+    questionRecordId: string,
+    force = false,
+): Promise<RedMarkDetection> {
+    return fetchApi<RedMarkDetection>(
+        `/questions/${questionRecordId}/detect-red-mark?force=${force}`,
+        {
+            method: "POST",
+        },
+    );
+}
+
+export async function confirmRedAnswer(
+    questionRecordId: string,
+    answer: string | null,
+) {
+    return fetchApi<RedMarkDetection>(
+        `/questions/${questionRecordId}/red-mark-confirmation`,
+        {
+            method: "PATCH",
+            body: JSON.stringify({ answer }),
+        },
+    );
+}
+
+// Quiz attempt endpoints.
+
+export async function saveQuizAttempt(
+    examId: string,
+    attempt: {
+        score: number;
+        total_questions: number;
+        correct_answers_count: number;
+        time_spent: number;
+        answers: Record<string, unknown>;
+        question_results: unknown[];
+        completed_at: number;
+    },
+) {
+    return fetchApi<{
+        id: string;
+        completed_at: number;
+    }>(
+        `/exams/${examId}/attempts`,
+        {
+            method: "POST",
+            body: JSON.stringify(attempt),
+        },
+    );
+}
+
+// Shared multipart upload payload.
+
+function createUploadForm(
+    file: File,
+    model: string,
+): FormData {
+    const formData = new FormData();
+
+    formData.append("file", file);
+    formData.append("model", model);
+
+    return formData;
+}
+
+// Legacy synchronous upload endpoint.
+
+export async function uploadPdf(
+    file: File,
+    model = "PaddleOCR-VL-1.6",
+): Promise<UploadResponse> {
+    return fetchApi<UploadResponse>(
+        "/upload",
+        {
+            method: "POST",
+            body: createUploadForm(file, model),
+        },
+        MAX_POLLING_TIME_MS,
+    );
+}
+
+// Asynchronous Request-Reply: submit a new upload job.
+
+export async function createUploadJob(
+    file: File,
+    model = "PaddleOCR-VL-1.6",
+    signal?: AbortSignal,
+): Promise<UploadJob> {
+    return fetchApi<UploadJob>(
+        "/upload/jobs",
+        {
+            method: "POST",
+            body: createUploadForm(file, model),
+            signal,
+        },
+        UPLOAD_TIMEOUT_MS,
+    );
+}
+
+// Asynchronous Request-Reply: query an existing job.
+
+export async function getUploadJob(
+    jobId: string,
+    signal?: AbortSignal,
+): Promise<UploadJob> {
+    return fetchApi<UploadJob>(
+        `/upload/jobs/${encodeURIComponent(jobId)}`,
+        {
+            method: "GET",
+            cache: "no-store",
+            signal,
+        },
+    );
+}
+
+export function isActiveUploadJob(
+    job: UploadJob | null,
+): boolean {
+    return (
+        job?.status === "queued" ||
+        job?.status === "processing"
+    );
+}
+
+// Abortable delay prevents overlapping polling requests.
+
+function wait(
+    milliseconds: number,
+    signal: AbortSignal,
+): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal.aborted) {
+            reject(signal.reason);
+            return;
+        }
+
+        const onAbort = () => {
+            window.clearTimeout(timer);
+
+            reject(signal.reason);
+        };
+
+        const timer = window.setTimeout(() => {
+            signal.removeEventListener(
+                "abort",
+                onAbort,
+            );
+
+            resolve();
+        }, milliseconds);
+
+        signal.addEventListener(
+            "abort",
+            onAbort,
+            {
+                once: true,
+            },
+        );
+    });
 }
 
 /**
- * Fetch all exams for a specific subject (without full question data).
- *
- * Backend endpoint: GET /api/subjects/:subjectId/exams
- * Response: ApiResponse<Exam[]>
- * Note: `questions` array may be empty in list view for performance.
+ * Poll an existing upload job until completion or failure.
+ * This function never submits another PDF.
  */
-export async function getExamsBySubject(subjectId: string): Promise<Exam[]> {
-  return fetchApi<Exam[]>(`/subjects/${subjectId}/exams`);
-}
+export async function waitForUploadJob(
+    initialJob: UploadJob,
+    onUpdate: (job: UploadJob) => void,
+    signal: AbortSignal,
+): Promise<UploadResponse> {
+    const pollingTimeout = AbortSignal.timeout(
+        MAX_POLLING_TIME_MS,
+    );
 
-// -- Exam Endpoints --
+    const pollingSignal = AbortSignal.any([
+        signal,
+        pollingTimeout,
+    ]);
 
-/**
- * Fetch a single exam with all questions.
- *
- * Backend endpoint: GET /api/exams/:examId
- * Response: ApiResponse<Exam>
- * The `questions` array should contain full question data including
- * options, matches, fill_in_answers, and explanations.
- */
-export async function getExam(examId: string): Promise<Exam> {
-  const exam = await fetchApi<Exam>(`/exams/${examId}`);
-  return {
-    ...exam,
-    questions: exam.questions.map((question) => ({
-      ...question,
-      question_image_url: resolveApiUrl(question.question_image_url),
-    })),
-  };
-}
+    let job = initialJob;
 
-export async function getProcessedExams(): Promise<ProcessedExamSummary[]> {
-  return fetchApi<ProcessedExamSummary[]>("/exams");
-}
+    try {
+        while (true) {
+            pollingSignal.throwIfAborted();
 
-export async function cropQuestionImage(questionRecordId: string, force = false) {
-  const result = await fetchApi<{ image_url: string; crop_status: string; page_number: number; source: string; cached: boolean }>(
-    `/questions/${questionRecordId}/crop-image?force=${force}`,
-    { method: "POST" },
-  );
-  return { ...result, image_url: resolveApiUrl(result.image_url) || "" };
-}
+            onUpdate(job);
 
-export async function detectRedMark(questionRecordId: string, force = false): Promise<RedMarkDetection> {
-  return fetchApi<RedMarkDetection>(
-    `/questions/${questionRecordId}/detect-red-mark?force=${force}`,
-    { method: "POST" },
-  );
-}
+            if (job.status === "completed") {
+                if (!job.result?.exam_id) {
+                    throw new Error(
+                        "Tác vụ đã hoàn thành nhưng " +
+                        "không có thông tin đề thi.",
+                    );
+                }
 
-export async function confirmRedAnswer(questionRecordId: string, answer: string | null) {
-  return fetchApi<RedMarkDetection>(`/questions/${questionRecordId}/red-mark-confirmation`, {
-    method: "PATCH",
-    body: JSON.stringify({ answer }),
-  });
-}
+                return job.result;
+            }
 
-export async function saveQuizAttempt(examId: string, attempt: {
-  score: number;
-  total_questions: number;
-  correct_answers_count: number;
-  time_spent: number;
-  answers: Record<string, unknown>;
-  question_results: unknown[];
-  completed_at: number;
-}) {
-  return fetchApi<{ id: string; completed_at: number }>(`/exams/${examId}/attempts`, {
-    method: "POST",
-    body: JSON.stringify(attempt),
-  });
-}
+            if (job.status === "failed") {
+                throw new Error(
+                    job.error ||
+                    "Không thể xử lý tài liệu PDF.",
+                );
+            }
 
-// -- Upload Endpoints --
+            if (!isActiveUploadJob(job)) {
+                throw new Error(
+                    "Máy chủ trả về trạng thái " +
+                    "tác vụ không hợp lệ.",
+                );
+            }
 
-/**
- * Upload a PDF file to generate an exam.
- *
- * Backend endpoint: POST /api/upload
- * Request: multipart/form-data with field "file" (PDF)
- * Response: ApiResponse<UploadResponse>
- *
- * The backend should:
- * 1. Accept the PDF file
- * 2. Parse/extract questions from the PDF
- * 3. Return the created exam ID and metadata
- */
-export async function uploadPdf(file: File, model = "PaddleOCR-VL-1.6"): Promise<UploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("model", model);
+            await wait(
+                POLLING_INTERVAL_MS,
+                pollingSignal,
+            );
 
-  const response = await fetch(`${API_BASE_URL}/upload`, {
-    method: "POST",
-    body: formData,
-    // Note: Do NOT set Content-Type header; browser sets it with boundary
-  });
+            job = await getUploadJob(
+                job.job_id,
+                pollingSignal,
+            );
+        }
+    } catch (error) {
+        if (signal.aborted) {
+            throw error;
+        }
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || error.detail || `Tải tệp lên không thành công (${response.status}).`);
-  }
+        if (pollingTimeout.aborted) {
+            throw new Error(
+                "Đã hết thời gian theo dõi tác vụ. " +
+                "PDF có thể vẫn đang được xử lý. " +
+                "Hãy tiếp tục theo dõi thay vì tải lại tệp.",
+                { cause: error },
+            );
+        }
 
-  const result: ApiResponse<UploadResponse> = await response.json();
-
-  if (!result.success) {
-    throw new Error(result.message || "Tải tệp lên không thành công.");
-  }
-
-  return result.data;
+        throw error;
+    }
 }
