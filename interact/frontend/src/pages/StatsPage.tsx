@@ -13,7 +13,8 @@ const questionTypeLabels: Record<QuestionType, string> = {
 function formatTime(seconds: number) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
-  return `${hours > 0 ? `${hours} giờ ` : ""}${mins} phút` || "0 phút";
+
+  return `${hours > 0 ? `${hours} giờ ` : ""}${mins} phút`;
 }
 
 function scoreColor(score: number) {
