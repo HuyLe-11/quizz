@@ -1,11 +1,16 @@
-"""Authenticated FastAPI entrypoint for QuizPDF."""
+"""Authenticated QuizPDF ASGI entrypoint.
 
+Select SQLite or Supabase using QUIZPDF_DATA_BACKEND.
+Always use SupabaseAuthGateway for API authentication.
+"""
+
+import logging
 import os
 
 from starlette.middleware.cors import CORSMiddleware
 
 try:
-    from backend.network.main import app as original_app
+    from backend.network.main import app as sqlite_app
     from backend.network.auth_gateway import (
         SupabaseAuthGateway,
     )
@@ -13,11 +18,40 @@ except ModuleNotFoundError as exc:
     if exc.name != "backend":
         raise
 
-    from network.main import app as original_app
+    from network.main import app as sqlite_app
     from network.auth_gateway import (
         SupabaseAuthGateway,
     )
 
+
+logger = logging.getLogger("quizpdf")
+
+DATA_BACKEND = os.getenv(
+    "QUIZPDF_DATA_BACKEND",
+    "sqlite",
+).strip().lower()
+
+if DATA_BACKEND == "cloud":
+    try:
+        from backend.network.cloud_api import app as selected_app
+    except ModuleNotFoundError as exc:
+        if exc.name != "backend":
+            raise
+        from network.cloud_api import app as selected_app
+
+elif DATA_BACKEND == "sqlite":
+    selected_app = sqlite_app
+
+else:
+    raise RuntimeError(
+        "QUIZPDF_DATA_BACKEND must be 'sqlite' or 'cloud'."
+    )
+
+
+logger.info(
+    "quizpdf=data_backend selected=%s",
+    DATA_BACKEND,
+)
 
 origins = [
     origin.strip()
@@ -29,7 +63,7 @@ origins = [
 ]
 
 authenticated_app = SupabaseAuthGateway(
-    original_app,
+    selected_app
 )
 
 app = CORSMiddleware(
