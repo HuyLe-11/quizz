@@ -1,12 +1,19 @@
-"""PaddleOCR hosted API adapter. Credentials stay on the backend."""
+"""PaddleOCR hosted adapter with selective vector-PDF rasterization."""
 
 import json
+import logging
+import math
 import os
+import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
+import pymupdf
 import requests
+
+logger = logging.getLogger("quizpdf")
 
 
 class PaddleOCRAPIError(RuntimeError):
@@ -22,76 +29,112 @@ class PaddleOCRTimeoutError(TimeoutError):
     pass
 
 
-def _check_response(response: requests.Response, stage: str) -> None:
-    if response.ok:
-        return
-
-    raise PaddleOCRAPIError(stage, response.status_code)
+class PaddleOCRNoTextError(RuntimeError):
+    pass
 
 
-def _string(value: Any) -> str:
-    return value.strip() if isinstance(value, str) else ""
+class PaddleOCRJobFailedError(RuntimeError):
+    """The provider explicitly reported a terminal failed job state."""
 
 
-def _join_strings(values: list[Any]) -> str:
-    return "\n".join(
-        text for value in values
-        if (text := _string(value))
-    )
+def _check_response(
+    response: requests.Response,
+    stage: str,
+) -> None:
+    if not response.ok:
+        raise PaddleOCRAPIError(
+            stage,
+            response.status_code,
+        )
 
 
 def _text_from(value: Any) -> str:
-    """Pick one representation of a single page, in OCR reading order."""
+    """Extract one page's OCR text without duplicating representations."""
+
     if not isinstance(value, dict):
         return ""
 
-    # Priority 1: Direct Markdown representation.
     for key in ("markdown_text", "markdownText"):
-        if text := _string(value.get(key)):
-            return text
+        if (
+            isinstance(value.get(key), str)
+            and value[key].strip()
+        ):
+            return value[key].strip()
 
     markdown = value.get("markdown")
 
-    if isinstance(markdown, dict):
-        if text := _string(markdown.get("text")):
-            return text
-    elif text := _string(markdown):
-        return text
+    if (
+        isinstance(markdown, str)
+        and markdown.strip()
+    ):
+        return markdown.strip()
 
-    # Priority 2: Structured layout parsing blocks.
+    if isinstance(markdown, dict):
+        text = markdown.get("text")
+
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
     blocks = value.get("parsing_res_list")
 
     if isinstance(blocks, list):
-        text = _join_strings([
-            block.get("block_content")
+        text = "\n".join(
+            block.get("block_content", "").strip()
             for block in blocks
-            if isinstance(block, dict)
-        ])
+            if (
+                isinstance(block, dict)
+                and isinstance(
+                    block.get("block_content"),
+                    str,
+                )
+                and block["block_content"].strip()
+            )
+        )
 
         if text:
             return text
 
-    # Priority 3: Basic OCR recognition results.
-    texts = value.get("rec_texts")
+    for key in ("rec_texts", "texts"):
+        items = value.get(key)
 
-    if isinstance(texts, list):
-        if text := _join_strings(texts):
-            return text
+        if isinstance(items, list):
+            text = "\n".join(
+                item.strip()
+                for item in items
+                if (
+                    isinstance(item, str)
+                    and item.strip()
+                )
+            )
 
-    # Priority 4: Alternative single-text representations.
-    for key in ("text", "rec_text", "block_content"):
-        if text := _string(value.get(key)):
-            return text
+            if text:
+                return text
 
-    # Priority 5: Nested response representations.
+    for key in (
+        "text",
+        "rec_text",
+        "block_content",
+    ):
+        text = value.get(key)
+
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+
     for key in (
         "pruned_result",
         "prunedResult",
+        "overall_ocr_res",
+        "ocr_result",
         "raw",
         "result",
     ):
-        if text := _text_from(value.get(key)):
-            return text
+        nested = value.get(key)
+
+        if isinstance(nested, dict):
+            text = _text_from(nested)
+
+            if text:
+                return text
 
     return ""
 
@@ -99,7 +142,8 @@ def _text_from(value: Any) -> str:
 def extract_page_texts(
     raw_response: dict[str, Any],
 ) -> list[str]:
-    """Return one string per reported page, including empty page slots."""
+    """Extract texts while retaining positions of empty OCR pages."""
+
     if not isinstance(raw_response, dict):
         return []
 
@@ -118,10 +162,10 @@ def extract_page_texts(
                 for page in pages
             ]
 
-    result = raw_response.get("result")
+    nested = raw_response.get("result")
 
-    if isinstance(result, dict):
-        pages = extract_page_texts(result)
+    if isinstance(nested, dict):
+        pages = extract_page_texts(nested)
 
         if pages:
             return pages
@@ -135,7 +179,7 @@ def _normalize_pages(
     result_lines: list[Any],
     model: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Keep the public page structure and raw geometry used by pdf_tools."""
+    """Normalize provider JSONL and preserve OCR geometry."""
 
     pages: list[dict[str, Any]] = []
     data_info: dict[str, Any] = {}
@@ -158,8 +202,10 @@ def _normalize_pages(
                 "PaddleOCR returned an invalid result object."
             )
 
-        if isinstance(result.get("dataInfo"), dict):
-            data_info.update(result["dataInfo"])
+        info = result.get("dataInfo")
+
+        if isinstance(info, dict):
+            data_info.update(info)
 
         items = result.get(result_key)
 
@@ -169,40 +215,49 @@ def _normalize_pages(
             )
 
         for item in items:
-            # Preserve the page position even if OCR returned
-            # an invalid or empty page entry.
             if not isinstance(item, dict):
                 pages.append({"raw": item})
                 continue
 
-            page = {
+            page: dict[str, Any] = {
                 "pruned_result": item.get("prunedResult"),
                 "input_image_url": item.get("inputImage"),
                 "raw": item,
             }
 
             if model == "PP-OCRv6":
-                page["ocr_image_url"] = item.get("ocrImage")
+                page["ocr_image_url"] = item.get(
+                    "ocrImage"
+                )
 
             else:
                 markdown = item.get("markdown")
 
                 if not isinstance(markdown, dict):
                     markdown = {
-                        "text": _string(markdown)
+                        "text": (
+                            markdown
+                            if isinstance(markdown, str)
+                            else ""
+                        )
                     }
 
                 page.update({
-                    "markdown_text": _string(
-                        markdown.get("text")
+                    "markdown_text": (
+                        markdown.get("text") or ""
                     ),
                     "markdown_images": markdown.get(
-                        "images", {}
+                        "images",
+                        {},
                     ),
                     "output_images": item.get(
-                        "outputImages", {}
+                        "outputImages",
+                        {},
                     ),
-                    "exports": item.get("exports", {}),
+                    "exports": item.get(
+                        "exports",
+                        {},
+                    ),
                     "markdown": markdown,
                 })
 
@@ -211,87 +266,408 @@ def _normalize_pages(
     return pages, data_info
 
 
-def recognize_pdf(
-    path: str,
-    model: str,
-) -> tuple[str, dict[str, Any]]:
-    """Submit a PDF to PaddleOCR and normalize its recognition result."""
-
-    token = os.getenv("PADDLEOCR_ACCESS_TOKEN")
-
-    if not token:
-        raise RuntimeError(
-            "Backend is missing PADDLEOCR_ACCESS_TOKEN."
+def _positive_number(
+    name: str,
+    default: str,
+) -> float:
+    try:
+        value = float(
+            os.getenv(name, default)
         )
 
-    job_url = os.getenv("JOB_URL")
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid configuration value for {name}."
+        ) from exc
 
-    if not job_url:
-        base_url = os.getenv(
-            "PADDLEOCR_BASE_URL",
-            "https://paddleocr.aistudio-app.com",
-        ).rstrip("/")
+    if (
+        not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(
+            f"{name} must be a positive number."
+        )
 
-        job_url = f"{base_url}/api/v2/ocr/jobs"
+    return value
 
-    # Preserve the original application's timeout configuration.
-    timeout = float(
-        os.getenv("PADDLEOCR_REQUEST_TIMEOUT", "20")
+
+def _nested_timeout(
+    error: BaseException,
+) -> bool:
+    """Detect SSL write timeouts wrapped in requests.ConnectionError."""
+
+    pending: list[Any] = [error]
+    visited: set[int] = set()
+
+    while pending:
+        current = pending.pop()
+
+        if id(current) in visited:
+            continue
+
+        visited.add(id(current))
+
+        if isinstance(
+            current,
+            (
+                requests.exceptions.Timeout,
+                TimeoutError,
+            ),
+        ):
+            return True
+
+        if isinstance(current, BaseException):
+            pending.extend([
+                current.__cause__,
+                current.__context__,
+                *current.args,
+            ])
+
+        elif isinstance(current, (tuple, list)):
+            pending.extend(current)
+
+    return False
+
+
+def _request_error(
+    exc: BaseException,
+    stage: str,
+) -> NoReturn:
+    if _nested_timeout(exc):
+        raise PaddleOCRTimeoutError(
+            f"PaddleOCR timed out during {stage}."
+        ) from exc
+
+    raise RuntimeError(
+        f"Could not connect to PaddleOCR during {stage}."
+    ) from exc
+
+
+@dataclass(frozen=True)
+class PDFBatch:
+    path: Path
+    start_page: int
+    page_count: int | None
+
+
+def _requires_raster(
+    page: pymupdf.Page,
+    min_drawings: int = 120,
+) -> bool:
+    """Detect vector-outlined pages lacking a normal text layer."""
+
+    text = page.get_text("text").strip()
+
+    return (
+        len(text) < 30
+        and len(page.get_drawings()) >= min_drawings
     )
 
-    poll_timeout = float(
-        os.getenv("PADDLEOCR_POLL_TIMEOUT", "75")
+
+def _normalize_vector_pdf(
+    source: Path,
+    output: Path,
+) -> tuple[Path, list[int]]:
+    """Rasterize vector-heavy pages without changing PDF page sizes."""
+
+    dpi = int(
+        _positive_number(
+            "PADDLEOCR_VECTOR_DPI",
+            "220",
+        )
     )
 
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
+    quality = int(
+        _positive_number(
+            "PADDLEOCR_VECTOR_JPEG_QUALITY",
+            "88",
+        )
+    )
 
-    optional_payload = json.dumps({})
+    if not 100 <= dpi <= 300:
+        raise ValueError(
+            "PADDLEOCR_VECTOR_DPI must be between 100 and 300."
+        )
 
-    # Step 1: Submit the PDF.
+    if not 40 <= quality <= 95:
+        raise ValueError(
+            "PADDLEOCR_VECTOR_JPEG_QUALITY must be between 40 and 95."
+        )
+
     try:
-        with open(path, "rb") as pdf_file:
+        document = pymupdf.open(source)
+
+    except (
+        pymupdf.FileDataError,
+        ValueError,
+        RuntimeError,
+    ):
+        logger.warning(
+            "paddleocr:preprocess "
+            "unable_to_open_pdf; using original"
+        )
+
+        return source, []
+
+    with document:
+        selected = [
+            page.number
+            for page in document
+            if _requires_raster(page)
+        ]
+
+        if not selected:
+            logger.info(
+                "paddleocr:preprocess "
+                "mode=original pages=%d",
+                len(document),
+            )
+
+            return source, []
+
+        selected_set = set(selected)
+
+        with pymupdf.open() as normalized:
+            for index, page in enumerate(document):
+                if index not in selected_set:
+                    normalized.insert_pdf(
+                        document,
+                        from_page=index,
+                        to_page=index,
+                    )
+                    continue
+
+                pix = page.get_pixmap(
+                    dpi=dpi,
+                    alpha=False,
+                )
+
+                jpeg_bytes = pix.tobytes(
+                    "jpeg",
+                    jpg_quality=quality,
+                )
+
+                output_page = normalized.new_page(
+                    width=page.rect.width,
+                    height=page.rect.height,
+                )
+
+                output_page.insert_image(
+                    output_page.rect,
+                    stream=jpeg_bytes,
+                    keep_proportion=False,
+                )
+
+            normalized.save(
+                output,
+                garbage=4,
+                deflate=True,
+            )
+
+        logger.info(
+            "paddleocr:preprocess "
+            "mode=selective_rasterized "
+            "pages=%d rasterized=%d "
+            "dpi=%d output_bytes=%d",
+            len(document),
+            len(selected),
+            dpi,
+            output.stat().st_size,
+        )
+
+        return output, [
+            index + 1
+            for index in selected
+        ]
+
+
+def _batches(
+    path: Path,
+    output_dir: Path,
+    *,
+    max_pages: int,
+    max_bytes: int,
+) -> list[PDFBatch]:
+    """Split a PDF by page count and approximate upload bytes."""
+
+    try:
+        document = pymupdf.open(path)
+
+    except (
+        pymupdf.FileDataError,
+        ValueError,
+        RuntimeError,
+    ):
+        return [
+            PDFBatch(path, 0, None)
+        ]
+
+    with document:
+        count = len(document)
+
+        if count == 0:
+            raise ValueError(
+                "Empty PDF cannot be recognized."
+            )
+
+        if (
+            count <= max_pages
+            and path.stat().st_size <= max_bytes
+        ):
+            return [
+                PDFBatch(path, 0, count)
+            ]
+
+        batches: list[PDFBatch] = []
+        start = 0
+
+        while start < count:
+            selected_bytes = None
+            selected_end = start
+
+            last_page = min(
+                count,
+                start + max_pages,
+            )
+
+            for end in range(
+                start + 1,
+                last_page + 1,
+            ):
+                with pymupdf.open() as part:
+                    part.insert_pdf(
+                        document,
+                        from_page=start,
+                        to_page=end - 1,
+                    )
+
+                    candidate = part.tobytes(
+                        garbage=4,
+                        deflate=True,
+                    )
+
+                if (
+                    len(candidate) > max_bytes
+                    and selected_bytes is not None
+                ):
+                    break
+
+                selected_end = end
+                selected_bytes = candidate
+
+                if len(candidate) > max_bytes:
+                    break
+
+            if selected_bytes is None:
+                raise RuntimeError(
+                    "Could not create an OCR PDF batch."
+                )
+
+            chunk_path = (
+                output_dir
+                / f"ocr-part-{len(batches) + 1:03d}.pdf"
+            )
+
+            chunk_path.write_bytes(
+                selected_bytes
+            )
+
+            if len(selected_bytes) > max_bytes:
+                logger.warning(
+                    "paddleocr:single_page_too_large "
+                    "page=%d bytes=%d limit=%d",
+                    start + 1,
+                    len(selected_bytes),
+                    max_bytes,
+                )
+
+            batches.append(
+                PDFBatch(
+                    path=chunk_path,
+                    start_page=start,
+                    page_count=selected_end - start,
+                )
+            )
+
+            start = selected_end
+
+        logger.info(
+            "paddleocr:pdf_split "
+            "pages=%d batches=%d bytes=%d",
+            count,
+            len(batches),
+            path.stat().st_size,
+        )
+
+        return batches
+
+
+def _process_batch(
+    batch: PDFBatch,
+    *,
+    model: str,
+    job_url: str,
+    headers: dict[str, str],
+    timeout: tuple[float, float],
+    poll_timeout: float,
+) -> tuple[
+    str,
+    list[dict[str, Any]],
+    dict[str, Any],
+]:
+    """Submit one job, poll status and download normalized OCR results."""
+
+    try:
+        with batch.path.open("rb") as pdf_file:
             response = requests.post(
                 job_url,
                 headers=headers,
                 data={
                     "model": model,
-                    "optionalPayload": optional_payload,
+                    "optionalPayload": json.dumps({}),
                 },
                 files={
                     "file": (
-                        Path(path).name,
+                        batch.path.name,
                         pdf_file,
                         "application/pdf",
-                    )
+                    ),
                 },
                 timeout=timeout,
             )
 
-    except requests.Timeout as exc:
-        raise PaddleOCRTimeoutError(
-            "Timed out submitting PDF to PaddleOCR."
-        ) from exc
+    except (
+        requests.RequestException,
+        TimeoutError,
+    ) as exc:
+        # Never retry an ambiguous POST automatically.
+        _request_error(
+            exc,
+            "PDF upload",
+        )
 
-    except requests.RequestException as exc:
+    _check_response(
+        response,
+        "submit",
+    )
+
+    try:
+        submission = response.json()
+
+    except ValueError as exc:
         raise RuntimeError(
-            "Could not connect to PaddleOCR API while submitting PDF."
+            "PaddleOCR returned invalid submit JSON."
         ) from exc
 
-    _check_response(response, "submit")
-
-    submitted = response.json()
-
-    data = (
-        submitted.get("data")
-        if isinstance(submitted, dict)
+    payload = (
+        submission.get("data")
+        if isinstance(submission, dict)
         else None
     )
 
     job_id = (
-        data.get("jobId")
-        if isinstance(data, dict)
+        payload.get("jobId")
+        if isinstance(payload, dict)
         else None
     )
 
@@ -300,52 +676,78 @@ def recognize_pdf(
             "PaddleOCR API response did not include a job ID."
         )
 
-    # Step 2: Poll the asynchronous OCR job.
-    deadline = time.monotonic() + poll_timeout
+    deadline = (
+        time.monotonic() + poll_timeout
+    )
+
     interval = 3.0
 
     while True:
+        remaining = (
+            deadline - time.monotonic()
+        )
+
+        if remaining <= 0:
+            raise PaddleOCRTimeoutError(
+                f"Timed out waiting for PaddleOCR job {job_id}."
+            )
+
         try:
             status_response = requests.get(
                 f"{job_url.rstrip('/')}/{job_id}",
                 headers=headers,
-                timeout=timeout,
+                timeout=(
+                    timeout[0],
+                    min(
+                        timeout[1],
+                        max(1.0, remaining),
+                    ),
+                ),
             )
 
-        except requests.Timeout as exc:
-            raise PaddleOCRTimeoutError(
-                "Timed out checking PaddleOCR job status."
-            ) from exc
+        except (
+            requests.RequestException,
+            TimeoutError,
+        ) as exc:
+            _request_error(
+                exc,
+                "job status polling",
+            )
 
-        except requests.RequestException as exc:
+        _check_response(
+            status_response,
+            "status",
+        )
+
+        try:
+            status_json = status_response.json()
+
+        except ValueError as exc:
             raise RuntimeError(
-                "Could not connect to PaddleOCR API while checking job status."
+                "PaddleOCR returned invalid status JSON."
             ) from exc
-
-        _check_response(status_response, "status")
-
-        status_payload = status_response.json()
 
         status = (
-            status_payload.get("data")
-            if isinstance(status_payload, dict)
+            status_json.get("data")
+            if isinstance(status_json, dict)
             else None
         )
 
         if not isinstance(status, dict):
             raise RuntimeError(
-                "PaddleOCR API returned an invalid job status."
+                "PaddleOCR returned an invalid job status."
             )
 
         state = status.get("state")
 
-        # Step 3: Download the completed OCR result.
         if state == "done":
-            result_url = status.get("resultUrl") or {}
+            result_urls = (
+                status.get("resultUrl") or {}
+            )
 
             json_url = (
-                result_url.get("jsonUrl")
-                if isinstance(result_url, dict)
+                result_urls.get("jsonUrl")
+                if isinstance(result_urls, dict)
                 else None
             )
 
@@ -355,22 +757,20 @@ def recognize_pdf(
                 )
 
             try:
-                # Do not forward the PaddleOCR access token
-                # to the result download URL.
+                # Do not send Bearer token to the result URL.
                 result_response = requests.get(
                     json_url,
                     timeout=timeout,
                 )
 
-            except requests.Timeout as exc:
-                raise PaddleOCRTimeoutError(
-                    "Timed out downloading PaddleOCR result."
-                ) from exc
-
-            except requests.RequestException as exc:
-                raise RuntimeError(
-                    "Could not download PaddleOCR result."
-                ) from exc
+            except (
+                requests.RequestException,
+                TimeoutError,
+            ) as exc:
+                _request_error(
+                    exc,
+                    "result download",
+                )
 
             _check_response(
                 result_response,
@@ -389,17 +789,26 @@ def recognize_pdf(
                     "PaddleOCR returned malformed JSONL data."
                 ) from exc
 
-            break
+            pages, info = _normalize_pages(
+                result_lines,
+                model,
+            )
+
+            return str(job_id), pages, info
 
         if state == "failed":
-            raise RuntimeError(
-                f"PaddleOCR job failed: "
+            raise PaddleOCRJobFailedError(
+                f"PaddleOCR job {job_id} failed: "
                 f"{status.get('errorMsg') or 'unknown error'}"
             )
 
-        if state not in {"pending", "running"}:
+        if state not in {
+            "pending",
+            "running",
+        }:
             raise RuntimeError(
-                f"PaddleOCR returned an unknown job state: {state!r}"
+                "PaddleOCR returned an unknown "
+                f"job state: {state!r}"
             )
 
         remaining = deadline - time.monotonic()
@@ -409,23 +818,370 @@ def recognize_pdf(
                 f"Timed out waiting for PaddleOCR job {job_id}."
             )
 
-        time.sleep(min(interval, remaining))
-        interval = min(interval * 1.5, 15.0)
+        time.sleep(
+            min(interval, remaining)
+        )
 
-    # Step 4: Normalize the results while preserving page geometry.
-    pages, data_info = _normalize_pages(
-        result_lines,
-        model,
+        interval = min(
+            interval * 1.5,
+            15.0,
+        )
+
+
+def recognize_pdf(
+    path: str,
+    model: str,
+) -> tuple[str, dict[str, Any]]:
+    """Recognize source PDF with batching and conditional model fallback."""
+
+    token = os.getenv(
+        "PADDLEOCR_ACCESS_TOKEN"
     )
 
-    raw = {
-        "job_id": job_id,
-        "data_info": data_info,
-        "pages": pages,
+    if not token:
+        raise RuntimeError(
+            "Backend is missing PADDLEOCR_ACCESS_TOKEN."
+        )
+
+    job_url = os.getenv("JOB_URL")
+
+    if not job_url:
+        job_url = (
+            os.getenv(
+                "PADDLEOCR_BASE_URL",
+                "https://paddleocr.aistudio-app.com",
+            ).rstrip("/")
+            + "/api/v2/ocr/jobs"
+        )
+
+    request_timeout = _positive_number(
+        "PADDLEOCR_REQUEST_TIMEOUT",
+        "180",
+    )
+
+    poll_timeout = _positive_number(
+        "PADDLEOCR_POLL_TIMEOUT",
+        "300",
+    )
+
+    max_pages = int(
+        _positive_number(
+            "PADDLEOCR_MAX_PAGES_PER_JOB",
+            "2",
+        )
+    )
+
+    max_bytes = int(
+        _positive_number(
+            "PADDLEOCR_MAX_UPLOAD_MB",
+            "1.5",
+        ) * 1024 * 1024
+    )
+
+    timeout = (
+        min(10.0, request_timeout),
+        request_timeout,
+    )
+
+    headers = {
+        "Authorization": f"Bearer {token}"
     }
 
-    # Step 5: Use the same extraction logic for both the full
-    # document Markdown and the page-aware question parser.
+    alternate_model = os.getenv(
+        "PADDLEOCR_EMPTY_TEXT_FALLBACK_MODEL",
+        "PP-OCRv6",
+    ).strip()
+
+    if alternate_model not in {
+        "",
+        "PP-OCRv6",
+    }:
+        raise ValueError(
+            "PADDLEOCR_EMPTY_TEXT_FALLBACK_MODEL "
+            "must be PP-OCRv6 or empty."
+        )
+
+    all_pages: list[dict[str, Any]] = []
+    jobs: list[dict[str, Any]] = []
+    data_info: dict[str, Any] = {}
+
+    with tempfile.TemporaryDirectory(
+        prefix="quizpdf-ocr-"
+    ) as temporary:
+        workdir = Path(temporary)
+        source_path = Path(path)
+
+        # Normalize vector-heavy PDF pages.
+        normalized_path, converted_pages = (
+            _normalize_vector_pdf(
+                source_path,
+                workdir / "normalized.pdf",
+            )
+        )
+
+        # Split into smaller PDF jobs.
+        batches = _batches(
+            normalized_path,
+            workdir,
+            max_pages=max_pages,
+            max_bytes=max_bytes,
+        )
+
+        for index, batch in enumerate(
+            batches,
+            start=1,
+        ):
+            logger.info(
+                "paddleocr:batch status=started "
+                "index=%d total=%d pages=%d..%s "
+                "size_bytes=%d model=%s",
+                index,
+                len(batches),
+                batch.start_page + 1,
+                (
+                    batch.start_page + batch.page_count
+                    if batch.page_count is not None
+                    else "unknown"
+                ),
+                batch.path.stat().st_size,
+                model,
+            )
+
+            used_fallback = False
+
+            try:
+                job_id, pages, info = (
+                    _process_batch(
+                        batch,
+                        model=model,
+                        job_url=job_url,
+                        headers=headers,
+                        timeout=timeout,
+                        poll_timeout=poll_timeout,
+                    )
+                )
+
+                job_history = [{
+                    "job_id": job_id,
+                    "model": model,
+                }]
+
+            except PaddleOCRJobFailedError:
+                if (
+                    model != "PaddleOCR-VL-1.6"
+                    or not alternate_model
+                ):
+                    raise
+
+                logger.warning(
+                    "paddleocr:batch "
+                    "primary_failed index=%d "
+                    "fallback_model=%s",
+                    index,
+                    alternate_model,
+                )
+
+                job_id, pages, info = (
+                    _process_batch(
+                        batch,
+                        model=alternate_model,
+                        job_url=job_url,
+                        headers=headers,
+                        timeout=timeout,
+                        poll_timeout=poll_timeout,
+                    )
+                )
+
+                used_fallback = True
+
+                job_history = [{
+                    "job_id": job_id,
+                    "model": alternate_model,
+                }]
+
+            # Preserve old single-batch behavior.
+            # For multiple batches, enforce exact page mapping.
+            if (
+                batch.page_count is not None
+                and len(pages) != batch.page_count
+            ):
+                if len(batches) > 1:
+                    raise RuntimeError(
+                        "PaddleOCR returned a different "
+                        f"page count for batch {index}: "
+                        f"expected {batch.page_count}, "
+                        f"got {len(pages)}."
+                    )
+
+                logger.warning(
+                    "paddleocr:single_batch_page_mismatch "
+                    "expected=%d got=%d",
+                    batch.page_count,
+                    len(pages),
+                )
+
+            missing = [
+                offset
+                for offset, page in enumerate(pages)
+                if not _text_from(page)
+            ]
+
+            # Empty pages can be intentional.
+            # Only invoke fallback when:
+            # - the entire batch is empty, OR
+            # - an empty page was rasterized from vector content.
+            missing_vector_page = any(
+                (
+                    batch.start_page + offset + 1
+                    in converted_pages
+                )
+                for offset in missing
+            )
+
+            should_fallback = (
+                bool(missing)
+                and not used_fallback
+                and model == "PaddleOCR-VL-1.6"
+                and bool(alternate_model)
+                and (
+                    len(missing) == len(pages)
+                    or missing_vector_page
+                )
+            )
+
+            if should_fallback:
+                logger.warning(
+                    "paddleocr:batch "
+                    "empty_text=%d/%d index=%d "
+                    "fallback_model=%s",
+                    len(missing),
+                    len(pages),
+                    index,
+                    alternate_model,
+                )
+
+                other_job, other_pages, other_info = (
+                    _process_batch(
+                        batch,
+                        model=alternate_model,
+                        job_url=job_url,
+                        headers=headers,
+                        timeout=timeout,
+                        poll_timeout=poll_timeout,
+                    )
+                )
+
+                if len(other_pages) != len(pages):
+                    raise RuntimeError(
+                        "Fallback OCR returned "
+                        "mismatched page count."
+                    )
+
+                for offset in missing:
+                    if _text_from(other_pages[offset]):
+                        pages[offset] = other_pages[offset]
+
+                info.update(other_info)
+
+                job_history.append({
+                    "job_id": other_job,
+                    "model": alternate_model,
+                })
+
+            empty_after = [
+                offset + batch.start_page + 1
+                for offset, page in enumerate(pages)
+                if not _text_from(page)
+            ]
+
+            if empty_after:
+                logger.warning(
+                    "paddleocr:batch empty_pages=%s",
+                    empty_after,
+                )
+
+            # The multi-batch parser needs global page numbers.
+            # Keep single-batch output backwards compatible.
+            if len(batches) > 1:
+                for offset, page in enumerate(pages):
+                    page["source_page_number"] = (
+                        batch.start_page + offset + 1
+                    )
+
+            all_pages.extend(pages)
+            data_info.update(info)
+
+            jobs.append({
+                "first_page": batch.start_page + 1,
+                "page_count": batch.page_count,
+                "jobs": job_history,
+            })
+
+            logger.info(
+                "paddleocr:batch status=completed "
+                "index=%d total=%d "
+                "recognized_pages=%d/%d",
+                index,
+                len(batches),
+                len(pages) - len(empty_after),
+                len(pages),
+            )
+
+    # Preserve existing API contract.
+    raw: dict[str, Any] = {
+        "job_id": jobs[0]["jobs"][0]["job_id"],
+        "data_info": data_info,
+        "pages": all_pages,
+    }
+
+    # Keep metadata expected by previous multi-batch tests.
+    if len(jobs) > 1:
+        raw["job_ids"] = [
+            item["jobs"][-1]["job_id"]
+            for item in jobs
+        ]
+
+        raw["batches"] = jobs
+
+    elif (
+        jobs
+        and len(jobs[0]["jobs"]) > 1
+    ):
+        raw["batches"] = jobs
+
+    if converted_pages:
+        raw["rasterized_pages"] = converted_pages
+
     page_texts = extract_page_texts(raw)
 
-    return "\n\n".join(page_texts), raw
+    total_characters = sum(
+        len(text.strip())
+        for text in page_texts
+    )
+
+    nonempty_pages = sum(
+        bool(text.strip())
+        for text in page_texts
+    )
+
+    logger.info(
+        "paddleocr:text_summary "
+        "pages=%d nonempty=%d "
+        "characters=%d rasterized=%d",
+        len(page_texts),
+        nonempty_pages,
+        total_characters,
+        len(converted_pages),
+    )
+
+    if total_characters == 0:
+        raise PaddleOCRNoTextError(
+            "PaddleOCR completed but returned "
+            "no recognizable text. "
+            "Check the OCR result format and PDF quality."
+        )
+
+    return (
+        "\n\n".join(page_texts),
+        raw,
+    )
