@@ -1,7 +1,9 @@
 /**
  * API service layer for communicating with the FastAPI backend.
- * Supports legacy uploads and asynchronous PDF processing jobs.
+ * Supports authenticated requests and asynchronous PDF jobs.
  */
+
+import { requireSupabase } from "./supabase";
 
 import type {
     ApiResponse,
@@ -40,6 +42,30 @@ export function resolveApiUrl(
         : `${API_ORIGIN}${path}`;
 }
 
+async function getAuthorizationHeader(): Promise<string> {
+    const client = requireSupabase();
+
+    const {
+        data: { session },
+        error,
+    } = await client.auth.getSession();
+
+    if (error) {
+        throw new Error(
+            `Không thể lấy phiên đăng nhập: ${error.message}`,
+        );
+    }
+
+    if (!session?.access_token) {
+        throw new Error(
+            "Phiên đăng nhập đã hết hạn. " +
+            "Vui lòng đăng nhập lại.",
+        );
+    }
+
+    return `Bearer ${session.access_token}`;
+}
+
 // Generic API request handling.
 
 async function fetchApi<T>(
@@ -48,6 +74,11 @@ async function fetchApi<T>(
     timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
     const headers = new Headers(options?.headers);
+
+    headers.set(
+        "Authorization",
+        await getAuthorizationHeader(),
+    );
 
     if (
         options?.body != null &&

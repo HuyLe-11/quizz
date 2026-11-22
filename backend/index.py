@@ -1,5 +1,5 @@
-"""Vercel FastAPI entrypoint for the backend service."""
+"""Vercel FastAPI entrypoint with Supabase authentication."""
 
-from network.main import app
+from network.secure_app import app
 
 __all__ = ["app"]
