@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { confirmRedAnswer, cropQuestionImage, detectRedMark } from "../../services/api";
+import { useQuiz } from "../../contexts/QuizContext";
 import type { Question, RedMarkDetection } from "../../types/types";
 
 interface QuestionToolsProps {
@@ -24,6 +25,7 @@ export function QuestionTools({ question }: QuestionToolsProps) {
   const [isCropping, setIsCropping] = useState(false);
   const [isImageOpen, setIsImageOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { updateQuestion } = useQuiz();
 
   useEffect(() => {
     setDetection(question.red_mark_detection ?? null);
@@ -61,6 +63,10 @@ export function QuestionTools({ question }: QuestionToolsProps) {
     try {
       const saved = await confirmRedAnswer(question.question_record_id, selectedAnswer);
       setDetection(saved);
+      // BUGFIX(F1): the confirmed answer was only kept in local state, while grading reads
+      // question.user_confirmed_answer from QuizContext. Confirming then submitting in the same
+      // session graded against the old (empty) key. Sync it into the active exam.
+      updateQuestion(question.question_id, { red_mark_detection: saved, user_confirmed_answer: saved.user_confirmed_answer ?? null });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Không thể lưu đáp án xác nhận.");
     } finally {

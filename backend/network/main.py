@@ -15,6 +15,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -137,6 +138,16 @@ def _assign_unique_question_ids(questions: list[dict]) -> None:
             used.add(source_number)
 
 
+def _exam_ocr_pages(exam: dict) -> list:
+    # BUGFIX(B4): `extra` or `extra.ocr_response` can be null (legacy JSON records). The previous
+    # chained `exam.get("extra", {}).get("ocr_response", {}).get("pages")` raised AttributeError
+    # (HTTP 500 on detect-red-mark, misleading 422 on crop-image). Read it defensively.
+    extra = exam.get("extra") if isinstance(exam.get("extra"), dict) else {}
+    response = extra.get("ocr_response") if isinstance(extra.get("ocr_response"), dict) else {}
+    pages = response.get("pages")
+    return pages if isinstance(pages, list) else []
+
+
 def _question_response(question: dict) -> dict:
     detection = question.get("red_mark_detection")
     asset = question.get("asset")
@@ -198,7 +209,10 @@ async def upload_pdf(file: UploadFile = File(...), model: str = Form("PaddleOCR-
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
             temp_file.write(contents)
             tmp_path = temp_file.name
-        markdown, raw_response = recognize_pdf(tmp_path, model)
+        # BUGFIX(B3): recognize_pdf is blocking (HTTP calls + time.sleep polling, up to ~2 min).
+        # Calling it directly inside this async endpoint froze the event loop, so every other
+        # request (health, history, other uploads) hung until OCR finished. Run it in a worker thread.
+        markdown, raw_response = await run_in_threadpool(recognize_pdf, tmp_path, model)
     except Exception as exc:
         logger.exception("upload=%s phase=ocr status=failed", exam_id)
         if "PADDLEOCR_ACCESS_TOKEN" in str(exc):
@@ -238,6 +252,11 @@ async def upload_pdf(file: UploadFile = File(...), model: str = Form("PaddleOCR-
             "fill_in_answers": [], "page_number": 1, "parse_fallback": True,
         }]
     _assign_unique_question_ids(questions)
+    # BUGFIX(B1): questions.composite_id is UNIQUE across the whole table, but the parser builds it
+    # from the file name only (e.g. "de_thi_Q01"). Uploading a second PDF with the same file name
+    # failed with IntegrityError -> HTTP 500. Prefix with the exam id to make it globally unique.
+    for question in questions:
+        question["composite_id"] = f"{exam_id}_{question['composite_id']}"
     logger.info(
         "upload=%s phase=question_extraction status=completed duration_seconds=%.2f pages=%d questions=%d",
         exam_id, time.perf_counter() - phase_started, len(page_texts), len(questions),
@@ -364,7 +383,7 @@ def crop_question_image(question_record_id: str, force: bool = False):
     try:
         asset = crop_question_pdf(
             pdf_path, question.get("source_question_number", question["question_id"]), question.get("page_number"), image_path,
-            ocr_pages=(exam.get("extra", {}).get("ocr_response", {}).get("pages", [])),
+            ocr_pages=_exam_ocr_pages(exam),  # BUGFIX(B4): null-safe OCR pages
         )
         asset["image_path"] = relative_image.as_posix()
     except Exception as exc:
@@ -394,7 +413,7 @@ def detect_question_red_mark(question_record_id: str, force: bool = False):
     if not force and cached and cached["config_fingerprint"] == config.fingerprint:
         return {"success": True, "data": cached | {"cached": True}}
 
-    raw_pages = exam.get("extra", {}).get("ocr_response", {}).get("pages", [])
+    raw_pages = _exam_ocr_pages(exam)  # BUGFIX(B4): null-safe OCR pages
     page_index = max(0, (question.get("page_number") or 1) - 1)
     page_ocr = raw_pages[page_index] if page_index < len(raw_pages) and isinstance(raw_pages[page_index], dict) else None
     try:

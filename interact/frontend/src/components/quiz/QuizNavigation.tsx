@@ -1,4 +1,5 @@
 import { useQuiz } from "../../contexts/QuizContext";
+import { checkQuestionCorrectness, isQuestionAnswered } from "../../services/stats";
 
 /**
  * Sidebar navigation grid for quick jumping between questions.
@@ -14,7 +15,8 @@ export function QuizNavigation() {
         <div className="grid grid-cols-5 gap-2 sm:grid-cols-4 md:grid-cols-5">
           {state.exam.questions.map((q, idx) => {
             const isCurrent = state.current_index === idx;
-            const isAnswered = !!state.answers[q.question_id];
+            // BUGFIX(F3): empty answer objects are not "answered".
+            const isAnswered = isQuestionAnswered(state.answers[q.question_id]);
             
             // Basic status color logic for dots
             let dotClass = "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] border-[var(--color-border)]";
@@ -25,9 +27,13 @@ export function QuizNavigation() {
               // Note: True correctness logic would require backend validation in a real app
               // For UI mock purposes, we just mark answered as green/info for now, 
               // or you can leave them as primary if answered.
-              dotClass = isAnswered 
-                ? "bg-[var(--color-success-light)] border-[var(--color-success)] text-[var(--color-success)]" 
-                : "bg-[var(--color-warning-light)] border-[var(--color-warning)] text-[var(--color-warning)]";
+              // BUGFIX(F2): after submit every answered question was painted green even when wrong.
+              // Use the same grading function as the score: green = correct, red = wrong, amber = skipped.
+              dotClass = !isAnswered
+                ? "bg-[var(--color-warning-light)] border-[var(--color-warning)] text-[var(--color-warning)]"
+                : checkQuestionCorrectness(q, state.answers[q.question_id])
+                  ? "bg-[var(--color-success-light)] border-[var(--color-success)] text-[var(--color-success)]"
+                  : "bg-[var(--color-danger-light)] border-[var(--color-danger)] text-[var(--color-danger)]";
             } else if (isAnswered) {
               dotClass = "bg-[var(--color-surface-hover)] border-[var(--color-border-strong)] text-[var(--color-text-secondary)] font-medium";
             }

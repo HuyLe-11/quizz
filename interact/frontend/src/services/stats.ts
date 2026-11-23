@@ -3,6 +3,18 @@ import type { Question, UserAnswer, QuizAttempt, QuizStats, QuestionType } from 
 const LOCAL_STORAGE_KEY = "quiz_attempts_history";
 
 /**
+ * BUGFIX(F3): an answer object can exist but be empty (all options unchecked in a multi-choice
+ * question, fill-in text cleared). Counting `!!answer` reported such questions as answered.
+ */
+export function isQuestionAnswered(answer: UserAnswer | undefined): boolean {
+  if (!answer) return false;
+  return (answer.selected_options?.length ?? 0) > 0
+    || !!answer.true_false_value
+    || Object.values(answer.matching_selections ?? {}).some(Boolean)
+    || (answer.fill_in_values ?? []).some((value) => value.trim() !== "");
+}
+
+/**
  * Check if the user's answer to a single question is correct.
  * This is used during quiz submission to calculate and log scores.
  * 
@@ -45,6 +57,8 @@ export function checkQuestionCorrectness(question: Question, answer: UserAnswer 
       const val = (answer.fill_in_values?.[0] || "").toLowerCase().trim();
       const correctList = question.fill_in_answers || [];
       // Input matches any of the accepted fill-in answers
+      // BUGFIX(F4): an empty input used to match an empty accepted answer; require a value.
+      if (!val) return false;
       return correctList.some((ans) => ans.toLowerCase().trim() === val);
     }
 

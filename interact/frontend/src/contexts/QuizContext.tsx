@@ -17,8 +17,8 @@ import {
   type ReactNode,
 } from "react";
 
-import type { Exam, UserAnswer, QuizState } from "../types/types";
-import { checkQuestionCorrectness, StatsService } from "../services/stats";
+import type { Exam, Question, UserAnswer, QuizState } from "../types/types";
+import { checkQuestionCorrectness, isQuestionAnswered, StatsService } from "../services/stats";
 import { MOCK_SUBJECTS } from "../data/mockData";
 import { saveQuizAttempt } from "../services/api";
 
@@ -29,6 +29,8 @@ type QuizAction =
   | { type: "SET_QUESTION_INDEX"; index: number }
   | { type: "SET_ANSWER"; questionId: number; answer: UserAnswer }
   | { type: "SUBMIT_QUIZ" }
+  // BUGFIX(F1): lets QuestionTools push a confirmed red-mark answer back into the exam used for grading.
+  | { type: "UPDATE_QUESTION"; questionId: number; patch: Partial<Question> }
   | { type: "RESET_QUIZ" };
 
 // -- Initial State --
@@ -73,6 +75,18 @@ function quizReducer(state: QuizState, action: QuizAction): QuizState {
         is_submitted: true,
       };
 
+    case "UPDATE_QUESTION":
+      if (!state.exam) return state;
+      return {
+        ...state,
+        exam: {
+          ...state.exam,
+          questions: state.exam.questions.map((question) =>
+            question.question_id === action.questionId ? { ...question, ...action.patch } : question,
+          ),
+        },
+      };
+
     case "RESET_QUIZ":
       return initialState;
 
@@ -90,6 +104,8 @@ interface QuizContextValue {
   setAnswer: (questionId: number, answer: UserAnswer) => void;
   submitQuiz: () => void;
   resetQuiz: () => void;
+  /** BUGFIX(F1): patch a question of the active exam (e.g. user-confirmed answer). */
+  updateQuestion: (questionId: number, patch: Partial<Question>) => void;
   /** Navigate to the next question. Returns false if already at last question. */
   nextQuestion: () => boolean;
   /** Navigate to the previous question. Returns false if already at first question. */
@@ -170,6 +186,10 @@ export function QuizProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "RESET_QUIZ" });
   }, []);
 
+  const updateQuestion = useCallback((questionId: number, patch: Partial<Question>) => {
+    dispatch({ type: "UPDATE_QUESTION", questionId, patch });
+  }, []);
+
   const nextQuestion = useCallback((): boolean => {
     if (!state.exam) return false;
     const nextIdx = state.current_index + 1;
@@ -185,7 +205,8 @@ export function QuizProvider({ children }: { children: ReactNode }) {
   }, [state.current_index]);
 
   const currentQuestion = getCurrentQuestion(state);
-  const answeredCount = Object.keys(state.answers).length;
+  // BUGFIX(F3): count only answers that actually contain a value.
+  const answeredCount = Object.values(state.answers).filter(isQuestionAnswered).length;
 
   return (
     <QuizContext.Provider
@@ -196,6 +217,7 @@ export function QuizProvider({ children }: { children: ReactNode }) {
         setAnswer,
         submitQuiz,
         resetQuiz,
+        updateQuestion,
         nextQuestion,
         prevQuestion,
         currentQuestion,

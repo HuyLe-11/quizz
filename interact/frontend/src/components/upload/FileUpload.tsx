@@ -40,8 +40,11 @@ export function FileUpload() {
     }
   };
 
-  const validateAndSetFile = (selectedFile: File) => {
-    if (selectedFile.type !== "application/pdf") {
+  const validateAndSetFile = (selectedFile: File | undefined) => {
+    // BUGFIX(F5): dropping text/a link has no file -> `selectedFile.type` threw TypeError.
+    // Some systems report an empty MIME type for PDFs; accept the .pdf extension like the backend does.
+    if (!selectedFile) return;
+    if (selectedFile.type !== "application/pdf" && !selectedFile.name.toLowerCase().endsWith(".pdf")) {
       setError("Vui lòng chọn tệp PDF.");
       return;
     }

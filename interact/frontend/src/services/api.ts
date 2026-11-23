@@ -15,6 +15,18 @@ const API_ORIGIN = (configuredApiOrigin || (import.meta.env.DEV ? "http://localh
   .replace(/\/api$/i, "");
 const API_BASE_URL = `${API_ORIGIN}/api`;
 
+// BUGFIX(F6): FastAPI validation errors (HTTP 422) return `detail` as an array of objects,
+// which was shown to the user as "[object Object]". Convert it to readable text.
+function errorMessage(error: { message?: unknown; detail?: unknown }, fallback: string): string {
+  if (typeof error.message === "string" && error.message) return error.message;
+  if (typeof error.detail === "string" && error.detail) return error.detail;
+  if (Array.isArray(error.detail)) {
+    const text = error.detail.map((item) => (item && typeof item === "object" && "msg" in item ? String(item.msg) : String(item))).join("; ");
+    if (text) return text;
+  }
+  return fallback;
+}
+
 export function resolveApiUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   return path.startsWith("http") ? path : `${API_ORIGIN}${path}`;
@@ -50,7 +62,7 @@ async function fetchApi<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || error.detail || `Máy chủ gặp lỗi (${response.status}).`);
+    throw new Error(errorMessage(error, `Máy chủ gặp lỗi (${response.status}).`)); // BUGFIX(F6)
   }
 
   const result: ApiResponse<T> = await response.json();
@@ -181,7 +193,7 @@ export async function uploadPdf(file: File, model = "PaddleOCR-VL-1.6"): Promise
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || error.detail || `Tải tệp lên không thành công (${response.status}).`);
+    throw new Error(errorMessage(error, `Tải tệp lên không thành công (${response.status}).`)); // BUGFIX(F6)
   }
 
   const result: ApiResponse<UploadResponse> = await response.json();

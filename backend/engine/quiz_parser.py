@@ -40,7 +40,15 @@ def parse_questions(markdown: str, exam_name: str) -> list[dict]:
             continue
         omatch = OPTION_START.match(line)
         if omatch:
-            current_option = {"label": (omatch.group(1) or omatch.group(2)).upper(), "text": omatch.group(3).strip()}
+            label = (omatch.group(1) or omatch.group(2)).upper()
+            # BUGFIX(B2): OCR sometimes emits the same option label twice in one question (e.g. a
+            # misread line or a sub-list). Saving both violated UNIQUE(question_id, label) in
+            # mcp_options and the whole upload failed with HTTP 500. Keep the line as text instead.
+            if any(option["label"] == label for option in current["options"]):
+                target = current_option or current["options"][-1]
+                target["text"] += "\n" + line.strip()
+                continue
+            current_option = {"label": label, "text": omatch.group(3).strip()}
             current["options"].append(current_option)
         elif line.strip():
             if current_option:

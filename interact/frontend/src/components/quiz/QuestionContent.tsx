@@ -117,7 +117,9 @@ function parseContent(text: string): React.ReactNode[] {
     const lang = match[1] || 'plaintext';
     const code = match[2];
     
-    let highlighted = code;
+    // BUGFIX(F7): the fallback injected raw code into dangerouslySetInnerHTML (HTML/script in OCR
+    // text would execute). Start from an HTML-escaped copy; hljs output is already escaped.
+    let highlighted = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     try {
       if (lang && hljs.getLanguage(lang)) {
         highlighted = hljs.highlight(code, { language: lang }).value;
