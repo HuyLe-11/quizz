@@ -1,4 +1,4 @@
-# Locate PDF question boundaries without estimating image size from text extents.
+"""Locate question boundaries in PDF text or PaddleOCR layout boxes."""
 from __future__ import annotations
 
 import math
@@ -8,20 +8,19 @@ from typing import Any
 
 import fitz
 
-
 QUESTION_RE = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*"
     r"(?:câu(?:\s+hỏi|\s+số)?|cau(?:\s+hoi|\s+so)?|question|q)\s*(\d+)\b",
     re.I,
 )
-
-ORDINAL_RE = re.compile(
-    r"^\s*(\d{1,3})\s*[.)]\s+\S"
-)
-
+ORDINAL_RE = re.compile(r"^\s*(\d{1,3})\s*[.)]\s+\S")
 OPTION_RE = re.compile(
     r"^\s*(?:[-*+]\s+)?(?:\*\*|__)?\s*"
     r"(?:\(([A-H])\)|([A-H])\s*[.):])",
+    re.I,
+)
+INLINE_OPTION_RE = re.compile(
+    r"(?<![\w])(?:A\s*[.)]|\(A\))\s*\S",
     re.I,
 )
 
@@ -39,30 +38,22 @@ def bbox(value: Any) -> tuple[float, float, float, float] | None:
                 for point in value
                 for coordinate in point
             ]
-
         numbers = [float(item) for item in value]
-
     except (TypeError, ValueError, IndexError):
         return None
 
-    if not all(math.isfinite(n) for n in numbers):
+    if not all(math.isfinite(number) for number in numbers):
         return None
 
     if len(numbers) == 4:
         x0, y0, x1, y1 = numbers
-
     elif len(numbers) >= 8 and len(numbers) % 2 == 0:
         x0, x1 = min(numbers[::2]), max(numbers[::2])
         y0, y1 = min(numbers[1::2]), max(numbers[1::2])
-
     else:
         return None
 
-    return (
-        (x0, y0, x1, y1)
-        if x1 > x0 and y1 > y0
-        else None
-    )
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
 
 
 def pdf_lines(page: fitz.Page) -> list[dict]:
@@ -74,19 +65,19 @@ def pdf_lines(page: fitz.Page) -> list[dict]:
     lines = []
 
     for words in grouped.values():
-        words.sort(key=lambda w: w[0])
+        words.sort(key=lambda word: word[0])
 
         rect = fitz.Rect(
-            min(w[0] for w in words),
-            min(w[1] for w in words),
-            max(w[2] for w in words),
-            max(w[3] for w in words),
+            min(word[0] for word in words),
+            min(word[1] for word in words),
+            max(word[2] for word in words),
+            max(word[3] for word in words),
         )
 
         rect = rect * page.rotation_matrix
 
         lines.append({
-            "text": " ".join(w[4] for w in words),
+            "text": " ".join(word[4] for word in words),
             "bbox": tuple(rect),
         })
 
@@ -102,15 +93,78 @@ def pdf_lines(page: fitz.Page) -> list[dict]:
 def _positive(value: Any) -> float | None:
     try:
         result = float(value)
-
-        return (
-            result
-            if math.isfinite(result) and result > 0
-            else None
-        )
-
+        return result if math.isfinite(result) and result > 0 else None
     except (TypeError, ValueError):
         return None
+
+
+def _recover_separate_question_rows(
+    lines: list[dict],
+) -> list[dict]:
+    """Recover independent OCR question rows from a merged block.
+
+    Only split consecutive question numbers when every text row
+    begins with its own question heading and contains evidence
+    of an answer option.
+
+    The vertical split is estimated, not an exact OCR position.
+    Ambiguous blocks remain unchanged.
+    """
+    recovered = []
+
+    for line in lines:
+        rows = [
+            part.strip()
+            for part in line["text"].splitlines()
+            if part.strip()
+        ]
+
+        if not 2 <= len(rows) <= 4:
+            recovered.append(line)
+            continue
+
+        numbers = [
+            question_number(row)
+            for row in rows
+        ]
+
+        if (
+            numbers[0] is None
+            or numbers != list(
+                range(
+                    numbers[0],
+                    numbers[0] + len(rows),
+                )
+            )
+            or any(
+                INLINE_OPTION_RE.search(row) is None
+                for row in rows
+            )
+        ):
+            recovered.append(line)
+            continue
+
+        x0, y0, x1, y1 = line["bbox"]
+        increment = (y1 - y0) / len(rows)
+
+        if increment < 8.0:
+            recovered.append(line)
+            continue
+
+        for index, row in enumerate(rows):
+            recovered.append({
+                **line,
+                "text": row,
+                "bbox": (
+                    x0,
+                    y0 + increment * index,
+                    x1,
+                    y0 + increment * (index + 1),
+                ),
+                "inferred_line_bounds": True,
+            })
+
+    return recovered
 
 
 def ocr_lines(
@@ -120,7 +174,6 @@ def ocr_lines(
     if not isinstance(page_ocr, dict):
         return []
 
-    # Normalized and raw representations may contain identical boxes.
     raw = page_ocr.get("raw")
     raw = raw if isinstance(raw, dict) else {}
 
@@ -198,7 +251,6 @@ def ocr_lines(
             _positive(source.get("width"))
             or _positive(page_ocr.get("width"))
         )
-
         height = (
             _positive(source.get("height"))
             or _positive(page_ocr.get("height"))
@@ -207,24 +259,22 @@ def ocr_lines(
         if width and height:
             sx = page.rect.width / width
             sy = page.rect.height / height
-
         elif all(
             0 <= value <= 1
             for _, rect in items
             for value in rect
         ):
-            sx = page.rect.width
-            sy = page.rect.height
-
+            sx, sy = (
+                page.rect.width,
+                page.rect.height,
+            )
         elif all(
             0 <= rect[0] < rect[2] <= page.rect.width
             and 0 <= rect[1] < rect[3] <= page.rect.height
             for _, rect in items
         ):
             sx = sy = 1.0
-
         else:
-            # Without dimensions, pixel-to-point scaling is uncertain.
             continue
 
         lines = []
@@ -245,13 +295,14 @@ def ocr_lines(
 
             if key not in seen:
                 seen.add(key)
-
                 lines.append({
                     "text": text,
                     "bbox": tuple(scaled),
                 })
 
         if lines:
+            lines = _recover_separate_question_rows(lines)
+
             return sorted(
                 lines,
                 key=lambda line: (
@@ -276,8 +327,6 @@ def _column(
     lines: list[dict],
     heading: dict,
 ) -> tuple[float, float]:
-    # Split only when both sides contain question headings
-    # and their bounding boxes are clearly separated.
     width = page.rect.width
 
     anchors = [
@@ -288,7 +337,10 @@ def _column(
     ]
 
     intervals = sorted(
-        (line["bbox"][0], line["bbox"][2])
+        (
+            line["bbox"][0],
+            line["bbox"][2],
+        )
         for line in anchors
     )
 
@@ -331,7 +383,8 @@ def _column(
     _, middle = max(candidates)
 
     center = (
-        heading["bbox"][0] + heading["bbox"][2]
+        heading["bbox"][0]
+        + heading["bbox"][2]
     ) / 2
 
     return (
@@ -347,8 +400,6 @@ def locate_in_lines(
     lines: list[dict],
     source: str,
 ) -> dict | None:
-    # A single block containing multiple question numbers
-    # cannot be split reliably using its bounding box.
     targets = [
         line
         for line in lines
@@ -363,11 +414,9 @@ def locate_in_lines(
 
     heading = targets[0]
 
-    if (
-        question_number(
-            heading["text"].splitlines()[0]
-        ) != number
-    ):
+    if question_number(
+        heading["text"].splitlines()[0]
+    ) != number:
         return None
 
     x0, x1 = _column(
@@ -382,7 +431,8 @@ def locate_in_lines(
         line
         for line in lines
         if x0 <= (
-            line["bbox"][0] + line["bbox"][2]
+            line["bbox"][0]
+            + line["bbox"][2]
         ) / 2 <= x1
     ]
 
@@ -393,12 +443,7 @@ def locate_in_lines(
         and _headings(line)
     ]
 
-    next_y = (
-        min(following)
-        if following
-        else None
-    )
-
+    next_y = min(following) if following else None
     end_y = (
         next_y
         if next_y is not None
@@ -431,13 +476,22 @@ def locate_in_lines(
     for label in duplicates:
         options.pop(label, None)
 
+    inferred = (
+        source == "paddleocr"
+        and heading.get("inferred_line_bounds")
+    )
+
     return {
         "bbox": (x0, y0, x1, end_y),
         "question_start_y": y0,
         "next_start_y": next_y,
         "column_x": (x0, x1),
         "options": options,
-        "source": source,
+        "source": (
+            "paddleocr_inferred"
+            if inferred
+            else source
+        ),
     }
 
 
@@ -490,6 +544,10 @@ def question_segments(
 
     x0, x1 = located["column_x"]
 
+    if located["source"] == "paddleocr_inferred":
+        # Limit overlap between estimated adjacent rows.
+        padding = min(padding, 4.0)
+
     start = max(
         0.0,
         located["question_start_y"] - padding,
@@ -505,7 +563,10 @@ def question_segments(
                     x0,
                     start,
                     x1,
-                    max(start + 1, end - padding / 2),
+                    max(
+                        start + 1,
+                        end - padding / 2,
+                    ),
                 ),
             )
         ], located
@@ -513,11 +574,15 @@ def question_segments(
     segments = [
         (
             first_page,
-            (x0, start, x1, page.rect.height),
+            (
+                x0,
+                start,
+                x1,
+                page.rect.height,
+            ),
         )
     ]
 
-    # Do not guess transitions between columns and pages.
     if (x0, x1) != (0.0, page.rect.width):
         return segments, located
 
@@ -555,8 +620,6 @@ def question_segments(
             else next_page.rect.height
         )
 
-        # Require evidence that the question continues:
-        # an option before the next question heading.
         if not any(
             line["bbox"][1] < stop
             and OPTION_RE.match(line["text"])
@@ -570,7 +633,10 @@ def question_segments(
                 0.0,
                 0.0,
                 next_page.rect.width,
-                min(next_page.rect.height, stop),
+                min(
+                    next_page.rect.height,
+                    stop,
+                ),
             ),
         ))
 

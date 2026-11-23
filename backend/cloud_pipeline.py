@@ -1,7 +1,7 @@
 """Cloud-native PDF processing pipeline for QuizPDF.
 
-Use local text extraction for text-based PDFs and PaddleOCR
-for scanned or insufficiently extractable documents.
+PaddleOCR performs recognition; local PDF tools prepare question images.
+A short-lived checkpoint permits retrying cloud persistence without OCR.
 """
 
 import hashlib
@@ -14,10 +14,9 @@ from pathlib import Path
 from typing import Callable
 
 try:
+    from backend.cloud_checkpoint import CloudOCRCheckpoint
     from backend.cloud_repository import CloudRepository
-    from backend.engine.paddle_client import (
-        extract_page_texts,
-    )
+    from backend.engine.paddle_client import extract_page_texts
     from backend.engine.smart_recognizer import (
         recognize_pdf_smart as recognize_pdf,
     )
@@ -37,12 +36,11 @@ except ModuleNotFoundError as exc:
     if exc.name != "backend":
         raise
 
+    from cloud_checkpoint import CloudOCRCheckpoint
     from cloud_repository import CloudRepository
-    from engine.paddle_client import (
-        extract_page_texts,
-    )
+    from engine.paddle_client import extract_page_texts
     from engine.smart_recognizer import (
-        recognize_pdf_smart as recognize_pdf,
+        recognize_pdf_smart as recognize_pdf
     )
     from engine.pdf_tools import crop_question_pdf
     from engine.quiz_parser import (
@@ -57,14 +55,13 @@ except ModuleNotFoundError as exc:
         _needs_crop_fallback,
     )
 
-logger = logging.getLogger("quizpdf")
 
+logger = logging.getLogger("quizpdf")
 Progress = Callable[[str], None]
 
 
 def _fallback_question(exam_id: str) -> dict:
     """Create a reviewable placeholder for unparsed documents."""
-
     return {
         "composite_id": f"{exam_id}_Q01",
         "question_id": 1,
@@ -98,7 +95,6 @@ def _prepare_question(
     crop_images: dict[str, bytes],
 ) -> None:
     """Assign IDs and create an optional cropped question image."""
-
     question_id = str(uuid.uuid4())
 
     question["id"] = question_id
@@ -112,15 +108,12 @@ def _prepare_question(
         "fill_in_answers",
     ):
         for index, child in enumerate(
-            question.get(field, []),
+            question.get(field, [])
         ):
             if not child.get("id"):
                 child["id"] = str(uuid.uuid4())
 
-            child.setdefault(
-                "order_index",
-                index,
-            )
+            child.setdefault("order_index", index)
 
     default_asset = {
         "image_path": None,
@@ -137,7 +130,6 @@ def _prepare_question(
     relative_image = (
         f"{exam_id}/question-{question_id}.png"
     )
-
     output_path = crop_directory / relative_image
 
     try:
@@ -164,16 +156,10 @@ def _prepare_question(
         image_bytes = output_path.read_bytes()
 
         if not image_bytes:
-            raise RuntimeError(
-                "Question crop is empty."
-            )
+            raise RuntimeError("Question crop is empty.")
 
         crop_images[relative_image] = image_bytes
-
-        # The cloud repository converts the relative path
-        # into a user-owned Supabase Storage object key.
         asset["image_path"] = relative_image
-
         question["asset"] = asset
 
         logger.info(
@@ -205,12 +191,7 @@ def process_cloud_pdf(
     access_token: str,
     progress: Progress | None = None,
 ) -> dict:
-    """Process a PDF and persist it in Supabase.
-
-    This function is designed to run inside an upload worker.
-    It does not use SQLite persistence.
-    """
-
+    """Prepare and persist a PDF, reusing owner-scoped OCR work on retry."""
     report = progress or (lambda _: None)
 
     if model not in ALLOWED_MODELS:
@@ -233,124 +214,142 @@ def process_cloud_pdf(
             "An authenticated Supabase user is required."
         )
 
-    exam_id = str(uuid.uuid4())
-
-    name = (
-        Path(filename).stem.strip()
-        or "Bài trắc nghiệm PDF"
-    )
-
-    logger.info(
-        "cloud=upload status=started "
-        "exam=%s bytes=%d model=%s",
-        exam_id,
-        len(contents),
+    checkpoint = CloudOCRCheckpoint(
+        user_id,
+        filename,
         model,
+        contents,
     )
+    cached = checkpoint.load()
 
-    with tempfile.TemporaryDirectory(
-        prefix="quizpdf-cloud-",
-    ) as temporary_directory:
-        work_directory = Path(temporary_directory)
+    if cached is not None:
+        exam = cached.exam
+        questions = cached.questions
+        crop_images = cached.crop_images
 
-        pdf_path = work_directory / "source.pdf"
-        pdf_path.write_bytes(contents)
+        logger.info(
+            "cloud=checkpoint status=restored exam=%s "
+            "questions=%d cropped=%d",
+            exam["id"],
+            len(questions),
+            len(crop_images),
+        )
 
-        # Phase 1: Hybrid PDF recognition.
-        report("ocr")
+    else:
+        exam_id = str(uuid.uuid4())
+        name = (
+            Path(filename).stem.strip()
+            or "Bài trắc nghiệm PDF"
+        )
 
-        markdown, raw_response = recognize_pdf(
-            str(pdf_path),
+        logger.info(
+            "cloud=upload status=started "
+            "exam=%s bytes=%d model=%s",
+            exam_id,
+            len(contents),
             model,
         )
 
-        ocr_pages = (
-            raw_response.get("pages", [])
-            if isinstance(raw_response, dict)
-            else []
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="quizpdf-cloud-"
+        ) as temporary:
+            work_directory = Path(temporary)
 
-        page_texts = extract_page_texts(
-            raw_response
-        )
+            pdf_path = work_directory / "source.pdf"
+            pdf_path.write_bytes(contents)
 
-        extraction_method = (
-            raw_response.get(
-                "extraction_method",
-                "paddleocr",
-            )
-            if isinstance(raw_response, dict)
-            else "paddleocr"
-        )
+            # Phase 1: OCR.
+            report("ocr")
 
-        logger.info(
-            "cloud=recognition status=completed "
-            "exam=%s method=%s "
-            "pages=%d characters=%d",
-            exam_id,
-            extraction_method,
-            len(page_texts),
-            len(markdown or ""),
-        )
-
-        # Phase 2: Question extraction.
-        report("question_extraction")
-
-        questions = (
-            parse_questions_by_pages(
-                page_texts,
-                name,
-            )
-            if page_texts
-            else parse_questions(
-                markdown,
-                name,
-            )
-        )
-
-        if not questions:
-            questions = [
-                _fallback_question(exam_id)
-            ]
-
-        _assign_unique_question_ids(
-            questions
-        )
-
-        logger.info(
-            "cloud=question_extraction "
-            "status=completed "
-            "exam=%s questions=%d",
-            exam_id,
-            len(questions),
-        )
-
-        # Phase 3: Prepare cropped question images.
-        report("question_crops")
-
-        crop_directory = (
-            work_directory / "crops"
-        )
-
-        crop_images: dict[str, bytes] = {}
-
-        normalized_pages = (
-            ocr_pages
-            if isinstance(ocr_pages, list)
-            else []
-        )
-
-        for question in questions:
-            _prepare_question(
-                question,
-                exam_id=exam_id,
-                pdf_path=pdf_path,
-                crop_directory=crop_directory,
-                ocr_pages=normalized_pages,
-                crop_images=crop_images,
+            markdown, raw_response = recognize_pdf(
+                str(pdf_path),
+                model,
             )
 
-        # Phase 4: Prepare the cloud exam record.
+            ocr_pages = (
+                raw_response.get("pages", [])
+                if isinstance(raw_response, dict)
+                else []
+            )
+
+            page_texts = extract_page_texts(
+                raw_response
+            )
+
+            extraction_method = (
+                raw_response.get(
+                    "extraction_method",
+                    "paddleocr",
+                )
+                if isinstance(raw_response, dict)
+                else "paddleocr"
+            )
+
+            logger.info(
+                "cloud=recognition status=completed "
+                "exam=%s method=%s pages=%d characters=%d",
+                exam_id,
+                extraction_method,
+                len(page_texts),
+                len(markdown or ""),
+            )
+
+            # Phase 2: Parse questions.
+            report("question_extraction")
+
+            questions = (
+                parse_questions_by_pages(
+                    page_texts,
+                    name,
+                )
+                if page_texts
+                else parse_questions(
+                    markdown,
+                    name,
+                )
+            )
+
+            if not questions:
+                questions = [
+                    _fallback_question(exam_id)
+                ]
+
+            _assign_unique_question_ids(
+                questions
+            )
+
+            logger.info(
+                "cloud=question_extraction status=completed "
+                "exam=%s questions=%d",
+                exam_id,
+                len(questions),
+            )
+
+            # Phase 3: Crop images.
+            report("question_crops")
+
+            crop_directory = (
+                work_directory / "crops"
+            )
+            crop_images: dict[str, bytes] = {}
+
+            normalized_pages = (
+                ocr_pages
+                if isinstance(ocr_pages, list)
+                else []
+            )
+
+            for question in questions:
+                _prepare_question(
+                    question,
+                    exam_id=exam_id,
+                    pdf_path=pdf_path,
+                    crop_directory=crop_directory,
+                    ocr_pages=normalized_pages,
+                    crop_images=crop_images,
+                )
+
+        # Phase 4: Prepare exam metadata.
         exam = {
             "id": exam_id,
             "name": name,
@@ -377,28 +376,75 @@ def process_cloud_pdf(
             },
         }
 
-        # Phase 5: Supabase PostgreSQL and Storage.
-        report("cloud_save")
-
-        with CloudRepository(
-            user_id,
-            access_token,
-        ) as repository:
-            result = repository.save_exam_bundle(
+        # Save the completed OCR work before cloud persistence.
+        try:
+            checkpoint.save(
                 exam,
                 questions,
-                contents,
                 crop_images,
             )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+        ) as exc:
+            # Preserve the original upload flow if local cache
+            # storage is unavailable.
+            logger.warning(
+                "cloud=checkpoint status=save_failed "
+                "error_type=%s",
+                type(exc).__name__,
+            )
 
-        logger.info(
-            "cloud=upload status=completed "
-            "exam=%s method=%s "
-            "questions=%d cropped=%d",
-            exam_id,
-            extraction_method,
-            len(questions),
-            len(crop_images),
+    # Phase 5: Persist to Supabase.
+    report("cloud_save")
+
+    with CloudRepository(
+        user_id,
+        access_token,
+    ) as repository:
+        if cached is not None:
+            # An RPC may have committed even if its response was lost.
+            existing = repository.get_exam_record(
+                exam["id"]
+            )
+
+            if existing is not None:
+                checkpoint.delete()
+
+                logger.info(
+                    "cloud=checkpoint status=already_saved "
+                    "exam=%s",
+                    exam["id"],
+                )
+
+                return {
+                    "exam_id": exam["id"],
+                    "title": existing.get(
+                        "name",
+                        exam["name"],
+                    ),
+                    "question_count": len(
+                        existing.get("questions") or []
+                    ),
+                }
+
+        result = repository.save_exam_bundle(
+            exam,
+            questions,
+            contents,
+            crop_images,
         )
 
-        return result
+    checkpoint.delete()
+
+    logger.info(
+        "cloud=upload status=completed "
+        "exam=%s method=%s questions=%d cropped=%d",
+        exam["id"],
+        exam["extra"]["extraction_method"],
+        len(questions),
+        len(crop_images),
+    )
+
+    return result
