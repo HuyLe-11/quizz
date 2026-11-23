@@ -1,7 +1,7 @@
 """Cloud-native PDF processing pipeline for QuizPDF.
 
-Reuse the existing OCR and parsing implementation while
-persisting exams and assets to Supabase instead of SQLite.
+Use local text extraction for text-based PDFs and PaddleOCR
+for scanned or insufficiently extractable documents.
 """
 
 import hashlib
@@ -17,7 +17,9 @@ try:
     from backend.cloud_repository import CloudRepository
     from backend.engine.paddle_client import (
         extract_page_texts,
-        recognize_pdf,
+    )
+    from backend.engine.smart_recognizer import (
+        recognize_pdf_smart as recognize_pdf,
     )
     from backend.engine.pdf_tools import crop_question_pdf
     from backend.engine.quiz_parser import (
@@ -38,7 +40,9 @@ except ModuleNotFoundError as exc:
     from cloud_repository import CloudRepository
     from engine.paddle_client import (
         extract_page_texts,
-        recognize_pdf,
+    )
+    from engine.smart_recognizer import (
+        recognize_pdf_smart as recognize_pdf,
     )
     from engine.pdf_tools import crop_question_pdf
     from engine.quiz_parser import (
@@ -93,7 +97,7 @@ def _prepare_question(
     ocr_pages: list[dict],
     crop_images: dict[str, bytes],
 ) -> None:
-    """Assign IDs and prepare an optional question crop."""
+    """Assign IDs and create an optional cropped question image."""
 
     question_id = str(uuid.uuid4())
 
@@ -113,7 +117,10 @@ def _prepare_question(
             if not child.get("id"):
                 child["id"] = str(uuid.uuid4())
 
-            child.setdefault("order_index", index)
+            child.setdefault(
+                "order_index",
+                index,
+            )
 
     default_asset = {
         "image_path": None,
@@ -163,8 +170,8 @@ def _prepare_question(
 
         crop_images[relative_image] = image_bytes
 
-        # The repository converts this path into an owner-scoped
-        # Supabase Storage key when persisting the exam.
+        # The cloud repository converts the relative path
+        # into a user-owned Supabase Storage object key.
         asset["image_path"] = relative_image
 
         question["asset"] = asset
@@ -198,10 +205,10 @@ def process_cloud_pdf(
     access_token: str,
     progress: Progress | None = None,
 ) -> dict:
-    """Process a PDF and save all resulting data to Supabase.
+    """Process a PDF and persist it in Supabase.
 
     This function is designed to run inside an upload worker.
-    It does not use the SQLite persistence functions.
+    It does not use SQLite persistence.
     """
 
     report = progress or (lambda _: None)
@@ -247,10 +254,9 @@ def process_cloud_pdf(
         work_directory = Path(temporary_directory)
 
         pdf_path = work_directory / "source.pdf"
-
         pdf_path.write_bytes(contents)
 
-        # Phase 1: OCR.
+        # Phase 1: Hybrid PDF recognition.
         report("ocr")
 
         markdown, raw_response = recognize_pdf(
@@ -268,10 +274,21 @@ def process_cloud_pdf(
             raw_response
         )
 
+        extraction_method = (
+            raw_response.get(
+                "extraction_method",
+                "paddleocr",
+            )
+            if isinstance(raw_response, dict)
+            else "paddleocr"
+        )
+
         logger.info(
-            "cloud=ocr status=completed "
-            "exam=%s pages=%d characters=%d",
+            "cloud=recognition status=completed "
+            "exam=%s method=%s "
+            "pages=%d characters=%d",
             exam_id,
+            extraction_method,
             len(page_texts),
             len(markdown or ""),
         )
@@ -301,13 +318,14 @@ def process_cloud_pdf(
         )
 
         logger.info(
-            "cloud=question_extraction status=completed "
+            "cloud=question_extraction "
+            "status=completed "
             "exam=%s questions=%d",
             exam_id,
             len(questions),
         )
 
-        # Phase 3: Prepare image crops locally.
+        # Phase 3: Prepare cropped question images.
         report("question_crops")
 
         crop_directory = (
@@ -332,7 +350,7 @@ def process_cloud_pdf(
                 crop_images=crop_images,
             )
 
-        # Phase 4: Prepare the cloud database record.
+        # Phase 4: Prepare the cloud exam record.
         exam = {
             "id": exam_id,
             "name": name,
@@ -353,13 +371,13 @@ def process_cloud_pdf(
             ),
             "extra": {
                 "ocr_model": model,
+                "extraction_method": extraction_method,
                 "ocr_markdown": markdown,
                 "ocr_response": raw_response,
             },
         }
 
-        # This phase will be added to the frontend's
-        # UploadJobPhase contract during API integration.
+        # Phase 5: Supabase PostgreSQL and Storage.
         report("cloud_save")
 
         with CloudRepository(
@@ -375,8 +393,10 @@ def process_cloud_pdf(
 
         logger.info(
             "cloud=upload status=completed "
-            "exam=%s questions=%d cropped=%d",
+            "exam=%s method=%s "
+            "questions=%d cropped=%d",
             exam_id,
+            extraction_method,
             len(questions),
             len(crop_images),
         )
