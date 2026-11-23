@@ -28,6 +28,7 @@ const API_ORIGIN = (
 const API_BASE_URL = `${API_ORIGIN}/api`;
 
 const REQUEST_TIMEOUT_MS = 20_000;
+const EXAM_LOAD_TIMEOUT_MS = 120_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 const POLLING_INTERVAL_MS = 2_000;
 const MAX_POLLING_TIME_MS = 600_000;
@@ -65,8 +66,6 @@ async function getAuthorizationHeader(): Promise<string> {
 
     return `Bearer ${session.access_token}`;
 }
-
-// Generic API request handling.
 
 async function fetchApi<T>(
     endpoint: string,
@@ -189,8 +188,13 @@ export async function getExamsBySubject(
 export async function getExam(
     examId: string,
 ): Promise<Exam> {
+    // A cloud exam may contain many private images.
+    // The backend currently signs their URLs before replying.
+    // Use a separate timeout instead of increasing it globally.
     const exam = await fetchApi<Exam>(
-        `/exams/${examId}`,
+        `/exams/${encodeURIComponent(examId)}`,
+        undefined,
+        EXAM_LOAD_TIMEOUT_MS,
     );
 
     return {
@@ -207,9 +211,7 @@ export async function getExam(
 export async function getProcessedExams(): Promise<
     ProcessedExamSummary[]
 > {
-    return fetchApi<ProcessedExamSummary[]>(
-        "/exams",
-    );
+    return fetchApi<ProcessedExamSummary[]>("/exams");
 }
 
 // Question image and red-mark detection endpoints.
@@ -233,8 +235,7 @@ export async function cropQuestionImage(
 
     return {
         ...result,
-        image_url:
-            resolveApiUrl(result.image_url) || "",
+        image_url: resolveApiUrl(result.image_url) || "",
     };
 }
 
@@ -376,7 +377,6 @@ function wait(
 
         const onAbort = () => {
             window.clearTimeout(timer);
-
             reject(signal.reason);
         };
 
@@ -385,7 +385,6 @@ function wait(
                 "abort",
                 onAbort,
             );
-
             resolve();
         }, milliseconds);
 
