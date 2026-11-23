@@ -7,11 +7,12 @@ The authentication gateway verifies the caller's JWT.
 import logging
 import os
 import threading
+import time
 import uuid
 
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from fastapi import (
     Depends,
@@ -75,6 +76,7 @@ except ModuleNotFoundError as exc:
 logger = logging.getLogger("quizpdf")
 
 Identity = tuple[str, str]
+SIGNED_URL_EXPIRATION_SECONDS = 600
 
 
 class AttemptPayload(BaseModel):
@@ -232,35 +234,39 @@ async def handle_cloud_review_error(
     )
 
 
-def _signed_image_url(
+def _validate_image_path(
     repository: CloudRepository,
-    image_path: str | None,
-) -> str | None:
-    """Sign only objects in the authenticated user's directory."""
-
-    if not image_path:
-        return None
-
+    image_path: str,
+) -> None:
+    """Reject any image outside the authenticated user's prefix."""
     prefix = f"{repository.user_id}/assets/"
 
-    if not image_path.startswith(prefix):
+    if (
+        not isinstance(image_path, str)
+        or not image_path.startswith(prefix)
+        or len(image_path) <= len(prefix)
+    ):
         raise CloudRepositoryError(
             "Question image is outside the user's Storage path."
         )
 
-    encoded = quote(
-        image_path,
-        safe="/",
-    )
+
+def _signed_image_url(
+    repository: CloudRepository,
+    image_path: str | None,
+) -> str | None:
+    """Create one signed URL for the existing review endpoints."""
+    if not image_path:
+        return None
+
+    _validate_image_path(repository, image_path)
+    encoded = quote(image_path, safe="/")
 
     result = repository._request(
         "POST",
-        (
-            f"/storage/v1/object/sign/"
-            f"{BUCKET}/{encoded}"
-        ),
+        f"/storage/v1/object/sign/{BUCKET}/{encoded}",
         json_data={
-            "expiresIn": 600,
+            "expiresIn": SIGNED_URL_EXPIRATION_SECONDS,
         },
     )
 
@@ -302,15 +308,170 @@ def _signed_image_url(
     )
 
 
+def _normalize_batch_signed_url(
+    repository: CloudRepository,
+    image_path: str,
+    signed_path: str,
+) -> str:
+    """Verify that each signed URL targets its requested private image.
+
+    The Storage API may return a path relative to /storage/v1,
+    a full Storage path, or an absolute URL. Never accept an
+    unrelated origin or an image path belonging to another item.
+    """
+    if signed_path.startswith("/storage/v1/object/sign/"):
+        url = repository.base_url + signed_path
+    elif signed_path.startswith("/object/sign/"):
+        url = (
+            repository.base_url
+            + "/storage/v1"
+            + signed_path
+        )
+    elif signed_path.startswith(
+        repository.base_url + "/storage/v1/object/sign/"
+    ):
+        url = signed_path
+    elif signed_path.startswith(
+        quote(image_path, safe="/") + "?"
+    ):
+        url = (
+            f"{repository.base_url}/storage/v1/object/sign/"
+            f"{BUCKET}/{signed_path}"
+        )
+    else:
+        raise CloudRepositoryError(
+            "Storage returned an unexpected batch signed URL."
+        )
+
+    parsed = urlsplit(url)
+    base = urlsplit(repository.base_url)
+
+    expected_path = (
+        f"/storage/v1/object/sign/{BUCKET}/{image_path}"
+    )
+
+    if (
+        parsed.scheme != base.scheme
+        or parsed.netloc != base.netloc
+        or unquote(parsed.path) != expected_path
+        or not parse_qs(parsed.query).get("token")
+    ):
+        raise CloudRepositoryError(
+            "Storage signed URL does not match its requested image."
+        )
+
+    return url
+
+
+def _signed_image_urls(
+    repository: CloudRepository,
+    image_paths: list[str],
+) -> dict[str, str]:
+    """Sign all distinct private image paths in one Storage request.
+
+    The result is mapped by object path, never by response order.
+    The single-image path remains backward compatible.
+    """
+    paths = list(dict.fromkeys(image_paths))
+
+    for image_path in paths:
+        _validate_image_path(repository, image_path)
+
+    if not paths:
+        return {}
+
+    if len(paths) == 1:
+        path = paths[0]
+        signed_url = _signed_image_url(repository, path)
+
+        if signed_url is None:
+            raise CloudRepositoryError(
+                "Storage did not return a signed URL."
+            )
+
+        return {path: signed_url}
+
+    started = time.monotonic()
+
+    result = repository._request(
+        "POST",
+        f"/storage/v1/object/sign/{BUCKET}",
+        json_data={
+            "expiresIn": SIGNED_URL_EXPIRATION_SECONDS,
+            "paths": paths,
+        },
+    )
+
+    if not isinstance(result, list):
+        raise CloudRepositoryError(
+            "Storage returned an invalid batch signing response."
+        )
+
+    requested = set(paths)
+    signed_urls: dict[str, str] = {}
+
+    for entry in result:
+        if not isinstance(entry, dict):
+            raise CloudRepositoryError(
+                "Storage returned an invalid signed URL entry."
+            )
+
+        path = entry.get("path")
+
+        if (
+            not isinstance(path, str)
+            or path not in requested
+            or path in signed_urls
+        ):
+            raise CloudRepositoryError(
+                "Storage returned an unexpected or duplicate image path."
+            )
+
+        if entry.get("error"):
+            raise CloudRepositoryError(
+                "Storage failed to sign one or more images."
+            )
+
+        signed_path = (
+            entry.get("signedURL")
+            or entry.get("signedUrl")
+        )
+
+        if not isinstance(signed_path, str):
+            raise CloudRepositoryError(
+                "Storage omitted a signed image URL."
+            )
+
+        signed_urls[path] = _normalize_batch_signed_url(
+            repository,
+            path,
+            signed_path,
+        )
+
+    if len(signed_urls) != len(requested):
+        raise CloudRepositoryError(
+            "Storage returned an incomplete set of signed URLs."
+        )
+
+    logger.info(
+        "cloud=image_signing status=completed images=%d "
+        "requests=1 duration_seconds=%.2f",
+        len(paths),
+        time.monotonic() - started,
+    )
+
+    return signed_urls
+
+
 def _cloud_exam_response(
     repository: CloudRepository,
     exam: dict,
 ) -> dict:
-    questions = []
+    prepared: list[tuple[dict, str | None]] = []
+    image_paths: list[str] = []
 
     for question in exam["questions"]:
         item = _question_response(question)
-
         asset = question.get("asset")
 
         image_path = (
@@ -319,11 +480,27 @@ def _cloud_exam_response(
             else None
         )
 
-        item["question_image_url"] = _signed_image_url(
-            repository,
-            image_path,
-        )
+        if image_path is not None:
+            _validate_image_path(repository, image_path)
 
+        if image_path:
+            image_paths.append(image_path)
+
+        prepared.append((item, image_path))
+
+    signed_urls = _signed_image_urls(
+        repository,
+        image_paths,
+    )
+
+    questions = []
+
+    for item, image_path in prepared:
+        item["question_image_url"] = (
+            signed_urls[image_path]
+            if image_path
+            else None
+        )
         questions.append(item)
 
     return {
@@ -371,6 +548,8 @@ def get_exam(
     exam_id: str,
     identity: CurrentIdentity,
 ):
+    started = time.monotonic()
+
     with CloudRepository(*identity) as repository:
         exam = repository.get_exam_record(exam_id)
 
@@ -384,6 +563,14 @@ def get_exam(
             repository,
             exam,
         )
+
+    logger.info(
+        "cloud=exam_read status=completed exam=%s "
+        "questions=%d duration_seconds=%.2f",
+        exam_id,
+        result["question_count"],
+        time.monotonic() - started,
+    )
 
     return {
         "success": True,
@@ -605,7 +792,6 @@ def create_attempt(
             )
 
         attempt = payload.model_dump()
-
         attempt["id"] = str(uuid.uuid4())
         attempt["exam_id"] = exam_id
 
