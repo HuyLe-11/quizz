@@ -1,7 +1,7 @@
-"""Cloud-native PDF processing pipeline for QuizPDF.
+"""Cloud PDF pipeline with owner-scoped OCR and Storage resume.
 
-PaddleOCR performs recognition; local PDF tools prepare question images.
-A short-lived checkpoint permits retrying cloud persistence without OCR.
+PaddleOCR recognizes the document. Question parsing and image cropping
+happen locally; CloudRepository persists the prepared bundle to Supabase.
 """
 
 import hashlib
@@ -40,7 +40,7 @@ except ModuleNotFoundError as exc:
     from cloud_repository import CloudRepository
     from engine.paddle_client import extract_page_texts
     from engine.smart_recognizer import (
-        recognize_pdf_smart as recognize_pdf
+        recognize_pdf_smart as recognize_pdf,
     )
     from engine.pdf_tools import crop_question_pdf
     from engine.quiz_parser import (
@@ -55,13 +55,11 @@ except ModuleNotFoundError as exc:
         _needs_crop_fallback,
     )
 
-
 logger = logging.getLogger("quizpdf")
 Progress = Callable[[str], None]
 
 
 def _fallback_question(exam_id: str) -> dict:
-    """Create a reviewable placeholder for unparsed documents."""
     return {
         "composite_id": f"{exam_id}_Q01",
         "question_id": 1,
@@ -113,7 +111,10 @@ def _prepare_question(
             if not child.get("id"):
                 child["id"] = str(uuid.uuid4())
 
-            child.setdefault("order_index", index)
+            child.setdefault(
+                "order_index",
+                index,
+            )
 
     default_asset = {
         "image_path": None,
@@ -130,7 +131,9 @@ def _prepare_question(
     relative_image = (
         f"{exam_id}/question-{question_id}.png"
     )
-    output_path = crop_directory / relative_image
+    output_path = (
+        crop_directory / relative_image
+    )
 
     try:
         with PDF_LOCK:
@@ -156,7 +159,9 @@ def _prepare_question(
         image_bytes = output_path.read_bytes()
 
         if not image_bytes:
-            raise RuntimeError("Question crop is empty.")
+            raise RuntimeError(
+                "Question crop is empty."
+            )
 
         crop_images[relative_image] = image_bytes
         asset["image_path"] = relative_image
@@ -228,8 +233,8 @@ def process_cloud_pdf(
         crop_images = cached.crop_images
 
         logger.info(
-            "cloud=checkpoint status=restored exam=%s "
-            "questions=%d cropped=%d",
+            "cloud=checkpoint status=restored "
+            "exam=%s questions=%d cropped=%d",
             exam["id"],
             len(questions),
             len(crop_images),
@@ -255,10 +260,11 @@ def process_cloud_pdf(
         ) as temporary:
             work_directory = Path(temporary)
 
-            pdf_path = work_directory / "source.pdf"
+            pdf_path = (
+                work_directory / "source.pdf"
+            )
             pdf_path.write_bytes(contents)
 
-            # Phase 1: OCR.
             report("ocr")
 
             markdown, raw_response = recognize_pdf(
@@ -294,7 +300,6 @@ def process_cloud_pdf(
                 len(markdown or ""),
             )
 
-            # Phase 2: Parse questions.
             report("question_extraction")
 
             questions = (
@@ -325,7 +330,6 @@ def process_cloud_pdf(
                 len(questions),
             )
 
-            # Phase 3: Crop images.
             report("question_crops")
 
             crop_directory = (
@@ -349,7 +353,6 @@ def process_cloud_pdf(
                     crop_images=crop_images,
                 )
 
-        # Phase 4: Prepare exam metadata.
         exam = {
             "id": exam_id,
             "name": name,
@@ -376,27 +379,24 @@ def process_cloud_pdf(
             },
         }
 
-        # Save the completed OCR work before cloud persistence.
         try:
             checkpoint.save(
                 exam,
                 questions,
                 crop_images,
             )
+
         except (
             OSError,
             ValueError,
             TypeError,
         ) as exc:
-            # Preserve the original upload flow if local cache
-            # storage is unavailable.
             logger.warning(
                 "cloud=checkpoint status=save_failed "
                 "error_type=%s",
                 type(exc).__name__,
             )
 
-    # Phase 5: Persist to Supabase.
     report("cloud_save")
 
     with CloudRepository(
@@ -404,7 +404,7 @@ def process_cloud_pdf(
         access_token,
     ) as repository:
         if cached is not None:
-            # An RPC may have committed even if its response was lost.
+            # A previous RPC could have committed and lost its response.
             existing = repository.get_exam_record(
                 exam["id"]
             )
@@ -434,6 +434,7 @@ def process_cloud_pdf(
             questions,
             contents,
             crop_images,
+            resume_existing=(cached is not None),
         )
 
     checkpoint.delete()
