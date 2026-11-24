@@ -1,8 +1,4 @@
-"""PaddleOCR hosted API adapter. Credentials remain on the backend.
-
-A POST upload can time out before a job id is returned. It is NOT
-retried blindly, because the remote service may have created a job.
-"""
+"""PaddleOCR hosted API adapter. Keep credentials on the backend."""
 from __future__ import annotations
 
 import json
@@ -31,63 +27,52 @@ class PaddleOCRTimeoutError(TimeoutError):
     pass
 
 
-def _timeout_seconds(name: str, default: float) -> float:
-    raw = os.getenv(name)
-
-    if raw is None or not raw.strip():
-        return default
+def _timeout(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
 
     try:
-        value = float(raw)
+        value = float(raw) if raw else default
     except ValueError as exc:
         raise ValueError(
-            f"{name} must be a positive number of seconds."
+            f"{name} must be a positive finite number."
         ) from exc
 
     if not math.isfinite(value) or value <= 0:
         raise ValueError(
-            f"{name} must be a positive finite number of seconds."
+            f"{name} must be a positive finite number."
         )
 
     return value
 
 
-def _is_transport_timeout(exc: BaseException) -> bool:
-    """Detect SSL write timeouts wrapped as requests.ConnectionError."""
-    pending: list[Any] = [exc]
-    visited: set[int] = set()
+def _is_timeout(exc: BaseException) -> bool:
+    pending = [exc]
+    visited = set()
 
-    while pending and len(visited) < 32:
-        value = pending.pop()
+    while pending:
+        error = pending.pop()
 
-        if id(value) in visited:
+        if id(error) in visited:
             continue
 
-        visited.add(id(value))
+        visited.add(id(error))
 
         if isinstance(
-            value,
+            error,
             (TimeoutError, requests.exceptions.Timeout),
         ):
             return True
 
-        if not isinstance(value, BaseException):
-            continue
-
-        if value.__cause__ is not None:
-            pending.append(value.__cause__)
-
-        if value.__context__ is not None:
-            pending.append(value.__context__)
-
         pending.extend(
-            arg
-            for arg in value.args
-            if isinstance(arg, BaseException)
+            x for x in (
+                error.__cause__,
+                error.__context__,
+                *error.args,
+            )
+            if isinstance(x, BaseException)
         )
 
-    message = str(exc).lower()
-    return "timed out" in message or "timeout" in message
+    return "timed out" in str(exc).lower()
 
 
 def _check_response(
@@ -101,170 +86,120 @@ def _check_response(
         )
 
 
+def _get(
+    url: str,
+    timeout: float,
+    stage: str,
+    **kwargs,
+) -> requests.Response:
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout,
+            **kwargs,
+        )
+    except requests.RequestException as exc:
+        if _is_timeout(exc):
+            raise PaddleOCRTimeoutError(
+                f"Timed out during PaddleOCR {stage}."
+            ) from exc
+
+        raise RuntimeError(
+            f"Could not connect to PaddleOCR during {stage}."
+        ) from exc
+
+    _check_response(response, stage)
+
+    return response
+
+
 def _text_from(value: Any) -> list[str]:
-    """Extract page text from PaddleOCR response variants."""
-    result: list[str] = []
+    """Prefer a single text representation instead of duplicating OCR data."""
+    if isinstance(value, list):
+        return [
+            text
+            for item in value
+            for text in _text_from(item)
+        ]
 
-    if isinstance(value, dict):
-        has_document_markdown = False
+    if not isinstance(value, dict):
+        return []
 
-        for key in (
-            "markdown_text",
-            "markdownText",
-            "text",
-            "rec_text",
-            "rec_texts",
-        ):
-            item = value.get(key)
+    for key in ("markdown_text", "markdownText"):
+        text = value.get(key)
 
-            if isinstance(item, str) and item.strip():
-                result.append(item.strip())
+        if isinstance(text, str) and text.strip():
+            return [text]
 
-                if key in ("markdown_text", "markdownText"):
-                    has_document_markdown = True
+    markdown = value.get("markdown")
 
-            elif isinstance(item, list):
-                result.extend(
-                    str(part).strip()
-                    for part in item
-                    if str(part).strip()
-                )
+    if isinstance(markdown, dict):
+        text = markdown.get("text")
 
-        markdown = value.get("markdown")
+        if isinstance(text, str) and text.strip():
+            return [text]
 
-        if (
-            not has_document_markdown
-            and isinstance(markdown, dict)
-            and isinstance(markdown.get("text"), str)
-        ):
-            result.append(
-                markdown["text"].strip()
-            )
+    for key in (
+        "rec_texts",
+        "rec_text",
+        "block_content",
+        "text",
+    ):
+        text = value.get(key)
 
-        for key in (
-            "pages",
-            "layout_parsing_results",
-            "layoutParsingResults",
-            "ocr_results",
-            "ocrResults",
-            "prunedResult",
-            "pruned_result",
-        ):
-            if (
-                has_document_markdown
-                and key in ("prunedResult", "pruned_result")
-            ):
-                continue
+        if isinstance(text, str) and text.strip():
+            return [text]
 
-            nested = value.get(key)
+        if isinstance(text, list):
+            strings = [
+                part
+                for part in text
+                if isinstance(part, str) and part.strip()
+            ]
 
-            if isinstance(nested, list):
-                for page in nested:
-                    result.extend(
-                        _text_from(page)
-                    )
-            elif isinstance(nested, dict):
-                result.extend(
-                    _text_from(nested)
-                )
+            if strings:
+                return strings
 
-        if isinstance(
-            value.get("result"),
-            (dict, list),
-        ):
-            result.extend(
-                _text_from(value["result"])
-            )
+    for key in (
+        "parsing_res_list",
+        "pruned_result",
+        "prunedResult",
+        "pages",
+        "layout_parsing_results",
+        "layoutParsingResults",
+        "ocr_results",
+        "ocrResults",
+        "overall_ocr_res",
+        "overallOcrRes",
+        "result",
+        "raw",
+    ):
+        text = _text_from(value.get(key))
 
-    elif isinstance(value, list):
-        for item in value:
-            result.extend(
-                _text_from(item)
-            )
+        if text:
+            return text
 
-    return result
+    return []
 
 
 def extract_page_texts(
     raw_response: dict[str, Any],
 ) -> list[str]:
-    """Return one OCR text string per input page."""
     pages = raw_response.get("pages")
 
-    if not isinstance(pages, list):
-        text = "\n\n".join(
-            _text_from(raw_response)
-        )
-        return [text] if text else []
+    if isinstance(pages, list):
+        # Empty or malformed pages must not shift
+        # subsequent source page numbers.
+        return [
+            "\n".join(_text_from(page))
+            if isinstance(page, dict)
+            else ""
+            for page in pages
+        ]
 
-    output: list[str] = []
+    text = "\n".join(_text_from(raw_response))
 
-    for page in pages:
-        if not isinstance(page, dict):
-            continue
-
-        page_text = (
-            page.get("markdown_text")
-            or page.get("markdownText")
-        )
-
-        if (
-            not page_text
-            and isinstance(page.get("markdown"), dict)
-        ):
-            page_text = page["markdown"].get("text")
-
-        if not page_text:
-            page_text = "\n".join(
-                _text_from(
-                    page.get("pruned_result")
-                    or page.get("prunedResult")
-                    or {}
-                )
-            )
-
-        output.append(
-            str(page_text or "")
-        )
-
-    return output
-
-
-def _get(
-    url: str,
-    *,
-    timeout: float,
-    stage: str,
-    headers: dict[str, str] | None = None,
-) -> requests.Response:
-    try:
-        if headers is not None:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=timeout,
-            )
-        else:
-            response = requests.get(
-                url,
-                timeout=timeout,
-            )
-
-    except requests.RequestException as exc:
-        if _is_transport_timeout(exc):
-            raise PaddleOCRTimeoutError(
-                f"Timed out during PaddleOCR {stage} request."
-            ) from exc
-
-        raise RuntimeError(
-            f"Could not connect to PaddleOCR API during {stage}."
-        ) from exc
-
-    _check_response(
-        response,
-        stage,
-    )
-    return response
+    return [text] if text else []
 
 
 def recognize_pdf(
@@ -278,26 +213,27 @@ def recognize_pdf(
             "Backend is missing PADDLEOCR_ACCESS_TOKEN."
         )
 
-    job_url = os.getenv("JOB_URL")
+    base = os.getenv(
+        "PADDLEOCR_BASE_URL",
+        "https://paddleocr.aistudio-app.com",
+    ).rstrip("/")
 
-    if not job_url:
-        base_url = os.getenv(
-            "PADDLEOCR_BASE_URL",
-            "https://paddleocr.aistudio-app.com",
-        ).rstrip("/")
-        job_url = f"{base_url}/api/v2/ocr/jobs"
+    job_url = (
+        os.getenv("JOB_URL")
+        or f"{base}/api/v2/ocr/jobs"
+    )
 
-    # Uploading a scanned PDF may need more socket-send time
-    # than checking status or downloading the result.
-    submit_timeout = _timeout_seconds(
+    submit_timeout = _timeout(
         "PADDLEOCR_SUBMIT_TIMEOUT",
         90.0,
     )
-    request_timeout = _timeout_seconds(
+
+    request_timeout = _timeout(
         "PADDLEOCR_REQUEST_TIMEOUT",
         20.0,
     )
-    poll_timeout = _timeout_seconds(
+
+    poll_timeout = _timeout(
         "PADDLEOCR_POLL_TIMEOUT",
         75.0,
     )
@@ -306,17 +242,13 @@ def recognize_pdf(
         "Authorization": f"Bearer {token}"
     }
 
-    optional_payload = json.dumps({})
-
     started = time.monotonic()
     filename = Path(path).name
-    pdf_bytes = Path(path).stat().st_size
+    size = Path(path).stat().st_size
 
     logger.info(
-        "ocr=submit status=started "
-        "filename=%s bytes=%d timeout_seconds=%.1f",
-        filename,
-        pdf_bytes,
+        "ocr=submit status=started bytes=%d timeout=%.1f",
+        size,
         submit_timeout,
     )
 
@@ -327,7 +259,7 @@ def recognize_pdf(
                 headers=headers,
                 data={
                     "model": model,
-                    "optionalPayload": optional_payload,
+                    "optionalPayload": json.dumps({}),
                 },
                 files={
                     "file": (
@@ -340,28 +272,19 @@ def recognize_pdf(
             )
 
     except requests.RequestException as exc:
-        elapsed = time.monotonic() - started
-
-        if _is_transport_timeout(exc):
+        if _is_timeout(exc):
             logger.warning(
-                "ocr=submit status=timeout "
-                "duration_seconds=%.2f bytes=%d",
-                elapsed,
-                pdf_bytes,
+                "ocr=submit status=timeout bytes=%d elapsed=%.2f",
+                size,
+                time.monotonic() - started,
             )
 
+            # The provider may already have created a job.
+            # Never retry POST blindly.
             raise PaddleOCRTimeoutError(
-                "Timed out uploading PDF to PaddleOCR. "
-                "Submission is unconfirmed; the server may "
-                "already have created a job."
+                "Timed out uploading PDF to PaddleOCR; "
+                "submission unconfirmed."
             ) from exc
-
-        logger.warning(
-            "ocr=submit status=connection_failed "
-            "duration_seconds=%.2f error=%s",
-            elapsed,
-            type(exc).__name__,
-        )
 
         raise RuntimeError(
             "Could not connect to PaddleOCR API "
@@ -371,6 +294,7 @@ def recognize_pdf(
     _check_response(response, "submit")
 
     submitted = response.json()
+
     data = (
         submitted.get("data")
         if isinstance(submitted, dict)
@@ -389,29 +313,34 @@ def recognize_pdf(
         )
 
     logger.info(
-        "ocr=submit status=completed duration_seconds=%.2f",
+        "ocr=submit status=completed elapsed=%.2f",
         time.monotonic() - started,
     )
 
-    poll_started = time.monotonic()
-    deadline = poll_started + poll_timeout
-
+    deadline = time.monotonic() + poll_timeout
     interval = 3.0
     last_state = None
 
     while True:
-        status_response = _get(
+        remaining = deadline - time.monotonic()
+
+        if remaining <= 0:
+            raise PaddleOCRTimeoutError(
+                "Timed out waiting for PaddleOCR job."
+            )
+
+        response = _get(
             f"{job_url.rstrip('/')}/{job_id}",
+            min(request_timeout, remaining),
+            "status",
             headers=headers,
-            timeout=request_timeout,
-            stage="status",
         )
 
-        status_payload = status_response.json()
+        payload = response.json()
 
         status = (
-            status_payload.get("data")
-            if isinstance(status_payload, dict)
+            payload.get("data")
+            if isinstance(payload, dict)
             else None
         )
 
@@ -423,15 +352,11 @@ def recognize_pdf(
         state = status.get("state")
 
         if state != last_state:
-            logger.info(
-                "ocr=poll state=%s elapsed_seconds=%.2f",
-                state,
-                time.monotonic() - poll_started,
-            )
+            logger.info("ocr=poll state=%s", state)
             last_state = state
 
         if state == "done":
-            result_url = status.get("resultUrl") or {}
+            result_url = status.get("resultUrl")
 
             json_url = (
                 result_url.get("jsonUrl")
@@ -444,24 +369,16 @@ def recognize_pdf(
                     "PaddleOCR completed without a result URL."
                 )
 
-            download_started = time.monotonic()
-
-            result_response = _get(
+            response = _get(
                 json_url,
-                timeout=request_timeout,
-                stage="result download",
-            )
-
-            logger.info(
-                "ocr=download status=completed "
-                "duration_seconds=%.2f",
-                time.monotonic() - download_started,
+                request_timeout,
+                "result download",
             )
 
             try:
                 result_lines = [
                     json.loads(line)
-                    for line in result_response.text.splitlines()
+                    for line in response.text.splitlines()
                     if line.strip()
                 ]
             except json.JSONDecodeError as exc:
@@ -472,10 +389,7 @@ def recognize_pdf(
             break
 
         if state == "failed":
-            raise RuntimeError(
-                "PaddleOCR job failed: "
-                f"{status.get('errorMsg') or 'unknown error'}"
-            )
+            raise RuntimeError("PaddleOCR job failed.")
 
         if state not in {"pending", "running"}:
             raise RuntimeError(
@@ -484,79 +398,70 @@ def recognize_pdf(
 
         remaining = deadline - time.monotonic()
 
-        if remaining <= 0:
-            raise PaddleOCRTimeoutError(
-                f"Timed out waiting for PaddleOCR job {job_id}."
-            )
+        if remaining > 0:
+            time.sleep(min(interval, remaining))
 
-        time.sleep(
-            min(interval, remaining)
-        )
-        interval = min(
-            interval * 1.5,
-            15.0,
-        )
+        interval = min(interval * 1.5, 15.0)
 
     pages: list[dict[str, Any]] = []
     data_info: dict[str, Any] = {}
 
     for line in result_lines:
         result = (
-            line.get("result", {})
+            line.get("result")
             if isinstance(line, dict)
-            else {}
+            else None
         )
 
-        if isinstance(
-            result.get("dataInfo"),
-            dict,
-        ):
-            data_info.update(
-                result["dataInfo"]
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                "Invalid PaddleOCR result record."
             )
 
-        if model == "PP-OCRv6":
-            for item in result.get("ocrResults", []):
-                pages.append({
-                    "pruned_result": item.get("prunedResult"),
-                    "ocr_image_url": item.get("ocrImage"),
-                    "input_image_url": item.get("inputImage"),
-                    "raw": item,
-                })
+        if isinstance(result.get("dataInfo"), dict):
+            data_info.update(result["dataInfo"])
 
-        else:
-            for item in result.get(
-                "layoutParsingResults",
-                [],
-            ):
-                markdown = item.get("markdown", {})
+        key = (
+            "ocrResults"
+            if model == "PP-OCRv6"
+            else "layoutParsingResults"
+        )
 
-                pages.append({
-                    "markdown_text": markdown.get(
-                        "text",
-                        "",
-                    ),
-                    "markdown_images": markdown.get(
-                        "images",
-                        {},
-                    ),
-                    "output_images": item.get(
-                        "outputImages",
-                        {},
-                    ),
-                    "pruned_result": item.get(
-                        "prunedResult"
-                    ),
-                    "input_image_url": item.get(
-                        "inputImage"
-                    ),
-                    "exports": item.get(
-                        "exports",
-                        {},
-                    ),
-                    "markdown": markdown,
-                    "raw": item,
-                })
+        items = result.get(key, [])
+
+        if not isinstance(items, list):
+            raise RuntimeError(
+                "Invalid PaddleOCR page list."
+            )
+
+        for item in items:
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "Invalid PaddleOCR page record."
+                )
+
+            page = {
+                "pruned_result": item.get("prunedResult"),
+                "input_image_url": item.get("inputImage"),
+                "raw": item,
+            }
+
+            if model == "PP-OCRv6":
+                page["ocr_image_url"] = item.get("ocrImage")
+
+            else:
+                md = item.get("markdown")
+                md = md if isinstance(md, dict) else {}
+
+                page.update(
+                    markdown_text=md.get("text", ""),
+                    markdown_images=md.get("images", {}),
+                    output_images=item.get("outputImages", {}),
+                    exports=item.get("exports", {}),
+                    markdown=md,
+                )
+
+            pages.append(page)
 
     raw = {
         "job_id": job_id,
@@ -564,17 +469,10 @@ def recognize_pdf(
         "pages": pages,
     }
 
-    page_texts = [
-        text
-        for page in pages
-        for text in _text_from(page)
-    ]
-
     logger.info(
-        "ocr=recognize status=completed "
-        "pages=%d total_seconds=%.2f",
+        "ocr=recognize status=completed pages=%d elapsed=%.2f",
         len(pages),
         time.monotonic() - started,
     )
 
-    return "\n\n".join(page_texts), raw
+    return "\n\n".join(extract_page_texts(raw)), raw

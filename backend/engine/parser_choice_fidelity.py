@@ -17,8 +17,8 @@ try:
 except ImportError:
     import fitz as pymupdf
 
-from backend.engine.pdf_fidelity import LOW_LINE
-from backend.engine.parser_text_normalizer import (
+from .pdf_fidelity import LOW_LINE
+from .parser_text_normalizer import (
     _options,
     _source_pronunciation_options,
 )

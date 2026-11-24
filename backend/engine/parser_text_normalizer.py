@@ -17,7 +17,7 @@ try:
 except ImportError:
     import fitz as pymupdf
 
-from backend.engine.pdf_fidelity import LOW_LINE, _page_rows
+from .pdf_fidelity import LOW_LINE, _page_rows
 
 logger = logging.getLogger("quizpdf.parser_normalizer")
 

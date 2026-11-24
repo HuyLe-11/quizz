@@ -1,31 +1,24 @@
-"""Local Parser Preview: real PaddleOCR; no database persistence.
-
-Use QUIZPDF_PARSER_PREVIEW=1 and bind Uvicorn to localhost.
-Reprocess uses original OCR text and PDF bytes without calling PaddleOCR.
-"""
+"""Local parser preview: live OCR or explicit read-only replay of saved OCR."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+import pymupdf
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
-load_dotenv(Path(__file__).resolve().parent / ".env")
-
-if os.getenv("QUIZPDF_PARSER_PREVIEW") != "1":
-    raise RuntimeError(
-        "Parser Preview is disabled. Set QUIZPDF_PARSER_PREVIEW=1."
-    )
 
 from backend.engine.paddle_client import (
     PaddleOCRAPIError,
@@ -33,27 +26,53 @@ from backend.engine.paddle_client import (
     extract_page_texts,
     recognize_pdf,
 )
-from backend.engine.parser_recovery import recover_pdf_headings
-from backend.engine.pdf_fidelity import enhance_ocr_with_pdf_geometry
-from backend.engine.parser_text_normalizer import normalize_pdf_backed_ocr
-from backend.engine.parser_choice_fidelity import reconcile_pronunciation_choices
-from backend.engine.parser_review_flags import clear_verified_correction_warnings
-from backend.engine.quiz_parser import parse_questions_by_pages
 
-logger = logging.getLogger("quizpdf.parser_preview")
+from backend.engine.parser_pipeline import (
+    normalize_option_layout,
+    parse_pdf_questions,
+    parse_text_questions,
+)
+
+
+BACKEND_DIR = Path(__file__).resolve().parent
+
+load_dotenv(BACKEND_DIR / ".env")
+
+if os.getenv("QUIZPDF_PARSER_PREVIEW") != "1":
+    raise RuntimeError(
+        "Parser Preview is disabled. "
+        "Set QUIZPDF_PARSER_PREVIEW=1."
+    )
+
+logger = logging.getLogger(
+    "quizpdf.parser_preview"
+)
 
 MAX_PDF_BYTES = 30 * 1024 * 1024
 MAX_REPROCESS_TEXT_BYTES = 20 * 1024 * 1024
 MAX_REPARSE_PAGES = 100
 MAX_TEXT_PER_PAGE = 1_000_000
-ALLOWED_MODELS = {"PaddleOCR-VL-1.6", "PP-OCRv6"}
+
+ALLOWED_MODELS = {
+    "PaddleOCR-VL-1.6",
+    "PP-OCRv6",
+}
 
 SECTION_IN_OPTION = re.compile(
-    r"(?:Mark\s+the\s+letter\b|Read\s+the\s+following\s+passage\b)",
-    re.IGNORECASE,
+    r"(?:Mark\s+the\s+letter\b|"
+    r"Read\s+the\s+following\s+passage\b)",
+    re.I,
 )
 
-app = FastAPI(title="QuizPDF Parser Preview")
+EXPECT_FOUR = re.compile(
+    r"\bA\s*,?\s*B\s*,?\s*C\s*,?\s*"
+    r"(?:or|hoặc)?\s*D\b",
+    re.I,
+)
+
+app = FastAPI(
+    title="QuizPDF Parser Preview"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,123 +91,273 @@ class ReparseRequest(BaseModel):
     page_texts: list[str]
 
 
-def _question_text(blocks: Any) -> str:
-    if not isinstance(blocks, list):
-        return ""
+def _mode() -> str:
+    mode = os.getenv(
+        "QUIZPDF_PREVIEW_OCR_MODE",
+        "live",
+    ).strip().lower()
 
-    return "\n".join(
-        str(block.get("value", ""))
-        for block in blocks
-        if isinstance(block, dict)
-    )
+    if mode not in {"live", "cache"}:
+        raise HTTPException(
+            500,
+            "QUIZPDF_PREVIEW_OCR_MODE phải là live hoặc cache.",
+        )
+
+    return mode
 
 
-def _parse_result(
-    filename: str,
-    model: str,
-    page_texts: list[str],
-    ocr_seconds: float | None,
-    *,
-    recovered_headings: list[dict] | None = None,
-    fidelity_repairs: list[dict] | None = None,
-    normalized_repairs: list[dict] | None = None,
-    preprocess_seconds: float | None = None,
-    pdf_contents: bytes | None = None,
-) -> dict:
+def _check_model(model: str) -> None:
     if model not in ALLOWED_MODELS:
-        raise HTTPException(400, "Mô hình OCR không hợp lệ.")
+        raise HTTPException(
+            400,
+            "Mô hình OCR không hợp lệ.",
+        )
 
-    if not page_texts or len(page_texts) > MAX_REPARSE_PAGES:
-        raise HTTPException(422, "Số lượng trang OCR không hợp lệ.")
 
-    if any(
-        not isinstance(page, str) or len(page) > MAX_TEXT_PER_PAGE
-        for page in page_texts
+def _check_pages(pages: Any) -> None:
+    if (
+        not isinstance(pages, list)
+        or not 1 <= len(pages) <= MAX_REPARSE_PAGES
     ):
         raise HTTPException(
-            413,
+            422,
+            "Số lượng trang OCR không hợp lệ.",
+        )
+
+    if any(
+        not isinstance(page, str)
+        or len(page) > MAX_TEXT_PER_PAGE
+        for page in pages
+    ):
+        raise HTTPException(
+            422,
             "Một trang OCR không hợp lệ hoặc quá dài.",
         )
 
-    started = time.perf_counter()
 
-    questions = parse_questions_by_pages(
-        page_texts,
-        Path(filename).stem or "Parser Preview",
-    )
+async def _read_pdf(
+    file: UploadFile,
+) -> tuple[str, bytes]:
+    filename = Path(
+        file.filename or "test.pdf"
+    ).name
 
-    parse_seconds = time.perf_counter() - started
-
-    final_choice_repairs = (
-        reconcile_pronunciation_choices(
-            pdf_contents,
-            questions,
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            400,
+            "Chỉ chấp nhận PDF.",
         )
-        if pdf_contents is not None
-        else []
+
+    contents = await file.read(
+        MAX_PDF_BYTES + 1
     )
 
-    # Only remove the warning when original PDF geometry
-    # confirms that all four underlined spans match A-D.
-    verified_corrections = clear_verified_correction_warnings(
-        questions,
-        fidelity_repairs or [],
+    if len(contents) > MAX_PDF_BYTES:
+        raise HTTPException(
+            413,
+            "PDF vượt quá 30 MB.",
+        )
+
+    if not contents.startswith(b"%PDF-"):
+        raise HTTPException(
+            400,
+            "Nội dung PDF không hợp lệ.",
+        )
+
+    try:
+        with pymupdf.open(
+            stream=contents,
+            filetype="pdf",
+        ) as document:
+            if (
+                document.needs_pass
+                or not len(document)
+            ):
+                raise ValueError(
+                    "Encrypted or empty PDF"
+                )
+
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(
+            400,
+            "Không thể mở PDF hoặc PDF có mật khẩu.",
+        ) from exc
+
+    return filename, contents
+
+
+def _load_saved_ocr(
+    contents: bytes,
+    model: str,
+) -> list[str]:
+    """Read an exact PDF hash/model match without modifying SQLite."""
+    path = Path(
+        os.getenv(
+            "DATABASE_PATH",
+            str(
+                BACKEND_DIR
+                / "data"
+                / "quiz.sqlite3"
+            ),
+        )
+    ).resolve()
+
+    if not path.is_file():
+        raise HTTPException(
+            404,
+            "Không tìm thấy SQLite chứa OCR cũ.",
+        )
+
+    digest = hashlib.sha256(
+        contents
+    ).hexdigest()
+
+    try:
+        with closing(
+            sqlite3.connect(
+                path.as_uri() + "?mode=ro",
+                uri=True,
+            )
+        ) as connection:
+            rows = connection.execute(
+                """
+                SELECT extra
+                FROM exams
+                WHERE source_sha256 = ?
+                ORDER BY uploaded_at DESC
+                """,
+                (digest,),
+            )
+
+            for (extra,) in rows:
+                try:
+                    data = json.loads(extra)
+                except (TypeError, ValueError):
+                    continue
+
+                if (
+                    not isinstance(data, dict)
+                    or data.get("ocr_model") != model
+                ):
+                    continue
+
+                raw = data.get("ocr_response")
+
+                if isinstance(raw, dict):
+                    pages = extract_page_texts(raw)
+
+                    if pages and any(
+                        page.strip() for page in pages
+                    ):
+                        return pages
+
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            500,
+            "Không đọc được OCR đã lưu trong SQLite.",
+        ) from exc
+
+    raise HTTPException(
+        404,
+        "Không có OCR đã lưu khớp SHA-256 và model. "
+        "Hãy dùng chế độ live.",
     )
 
-    incomplete: list[int] = []
-    contaminated: list[int] = []
-    needs_review: list[int] = []
 
-    for question in questions:
+def _block_text(blocks: list[dict]) -> str:
+    return "\n".join(
+        str(block.get("value", ""))
+        for block in blocks
+    ).strip()
+
+
+def _response(
+    filename: str,
+    model: str,
+    parsed: dict,
+    ocr_seconds: float | None,
+) -> dict:
+    incomplete = []
+    contaminated = []
+    review = []
+
+    for question in parsed["questions"]:
         number = question["question_id"]
-        choices = question.get("mcp_options", [])
 
-        if [
+        choices = question.get(
+            "mcp_options",
+            [],
+        )
+
+        labels = [
             choice.get("label")
             for choice in choices
-        ] != list("ABCD"):
+        ]
+
+        expected = [
+            chr(ord("A") + index)
+            for index in range(len(labels))
+        ]
+
+        four = bool(
+            EXPECT_FOUR.search(
+                question.get(
+                    "section_instruction",
+                    "",
+                )
+            )
+        )
+
+        if (
+            question["type"] == "mcp"
+            and (
+                len(labels) < 2
+                or labels != expected
+                or (four and len(labels) != 4)
+                or any(
+                    not _block_text(choice["content"])
+                    for choice in choices
+                )
+            )
+        ):
             incomplete.append(number)
 
         if any(
             SECTION_IN_OPTION.search(
-                _question_text(
-                    choice.get("content")
-                )
+                _block_text(choice["content"])
             )
             for choice in choices
         ):
             contaminated.append(number)
 
         if question.get("parse_fallback"):
-            needs_review.append(number)
+            review.append(number)
 
     return {
         "filename": filename,
         "model": model,
-        "page_count": len(page_texts),
-        "page_texts": page_texts,
-        "question_count": len(questions),
-        "questions": questions,
+        "page_count": len(
+            parsed["page_texts"]
+        ),
+        "page_texts": parsed["page_texts"],
+        "raw_page_texts": parsed[
+            "raw_page_texts"
+        ],
+        "question_count": len(
+            parsed["questions"]
+        ),
+        "questions": parsed["questions"],
         "diagnostics": {
+            **parsed["diagnostics"],
             "incomplete_options": incomplete,
             "contaminated_options": contaminated,
-            "needs_review": needs_review,
-            "recovered_headings": recovered_headings or [],
-            "pdf_fidelity_repairs": fidelity_repairs or [],
-            "normalized_repairs": normalized_repairs or [],
-            "final_choice_repairs": final_choice_repairs,
-            "verified_correction_questions": verified_corrections,
+            "needs_review": review,
         },
         "timings": {
+            **parsed["timings"],
             "ocr_seconds": (
                 round(ocr_seconds, 2)
                 if ocr_seconds is not None
-                else None
-            ),
-            "parser_seconds": round(parse_seconds, 4),
-            "preprocess_seconds": (
-                round(preprocess_seconds, 4)
-                if preprocess_seconds is not None
                 else None
             ),
         },
@@ -199,50 +368,35 @@ def _rebuild_from_pdf(
     contents: bytes,
     filename: str,
     model: str,
-    original_texts: list[str],
+    pages: list[str],
     ocr_seconds: float | None,
 ) -> dict:
-    """Replay PDF transformations without invoking OCR."""
-    preprocess_started = time.perf_counter()
+    _check_pages(pages)
 
-    enhanced, recovered = recover_pdf_headings(
+    with pymupdf.open(
+        stream=contents,
+        filetype="pdf",
+    ) as document:
+        if len(document) != len(pages):
+            raise HTTPException(
+                422,
+                "Số trang OCR không khớp PDF gốc; "
+                "không thể gán tọa độ an toàn.",
+            )
+
+    parsed = parse_pdf_questions(
         contents,
-        original_texts,
+        pages,
+        Path(filename).stem,
+        embed_context=False,
     )
 
-    enriched, fidelity_repairs = enhance_ocr_with_pdf_geometry(
-        contents,
-        enhanced,
-    )
-
-    stabilized, normalized_repairs = normalize_pdf_backed_ocr(
-        contents,
-        enriched,
-    )
-
-    preprocess_seconds = time.perf_counter() - preprocess_started
-
-    result = _parse_result(
+    return _response(
         filename,
         model,
-        stabilized,
+        parsed,
         ocr_seconds,
-        recovered_headings=[
-            item.as_dict()
-            for item in recovered
-        ],
-        fidelity_repairs=[
-            item.as_dict()
-            for item in fidelity_repairs
-        ],
-        normalized_repairs=normalized_repairs,
-        preprocess_seconds=preprocess_seconds,
-        pdf_contents=contents,
     )
-
-    result["raw_page_texts"] = original_texts
-
-    return result
 
 
 @app.get("/api/health")
@@ -252,7 +406,12 @@ def health() -> dict:
         "data": {
             "status": "ok",
             "mode": "parser-preview",
-            "database": "disabled",
+            "database": (
+                "read-only-cache"
+                if _mode() == "cache"
+                else "disabled"
+            ),
+            "ocr_mode": _mode(),
         },
     }
 
@@ -262,72 +421,78 @@ async def recognize_and_preview(
     file: UploadFile = File(...),
     model: str = Form("PaddleOCR-VL-1.6"),
 ) -> dict:
-    """Call PaddleOCR once and return parsed questions without saving."""
-    if model not in ALLOWED_MODELS:
-        raise HTTPException(400, "Mô hình OCR không hợp lệ.")
+    _check_model(model)
 
-    filename = Path(file.filename or "test.pdf").name
+    filename, contents = await _read_pdf(
+        file
+    )
 
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Chỉ chấp nhận file PDF.")
+    if _mode() == "cache":
+        pages = await run_in_threadpool(
+            _load_saved_ocr,
+            contents,
+            model,
+        )
 
-    contents = await file.read(MAX_PDF_BYTES + 1)
+        elapsed = None
 
-    if len(contents) > MAX_PDF_BYTES:
-        raise HTTPException(413, "PDF vượt quá 30 MB.")
+    else:
+        started = time.perf_counter()
 
-    if not contents.startswith(b"%PDF-"):
-        raise HTTPException(400, "Nội dung PDF không hợp lệ.")
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="quizpdf-parser-preview-"
+            ) as directory:
+                path = (
+                    Path(directory)
+                    / "source.pdf"
+                )
 
-    started = time.perf_counter()
+                path.write_bytes(contents)
 
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="quizpdf-parser-preview-"
-        ) as directory:
-            path = Path(directory) / "source.pdf"
-            path.write_bytes(contents)
+                _, raw = await run_in_threadpool(
+                    recognize_pdf,
+                    str(path),
+                    model,
+                )
 
-            markdown, raw_response = await run_in_threadpool(
-                recognize_pdf,
-                str(path),
-                model,
+            pages = extract_page_texts(raw)
+
+        except PaddleOCRTimeoutError as exc:
+            logger.warning(
+                "preview=ocr status=timeout reason=%s",
+                str(exc),
             )
 
-    except PaddleOCRTimeoutError as exc:
-        logger.warning("preview=ocr status=timeout")
-        raise HTTPException(
-            504,
-            "PaddleOCR vượt thời gian chờ.",
-        ) from exc
+            raise HTTPException(
+                504,
+                f"PaddleOCR vượt thời gian chờ: {exc}",
+            ) from exc
 
-    except PaddleOCRAPIError as exc:
-        logger.warning(
-            "preview=ocr status=provider_error http=%d",
-            exc.status_code,
-        )
-        raise HTTPException(
-            502,
-            f"PaddleOCR trả HTTP {exc.status_code}.",
-        ) from exc
+        except PaddleOCRAPIError as exc:
+            raise HTTPException(
+                502,
+                f"PaddleOCR trả HTTP {exc.status_code} "
+                f"ở bước {exc.stage}.",
+            ) from exc
 
-    except Exception as exc:
-        logger.exception(
-            "preview=ocr status=failed error_type=%s",
-            type(exc).__name__,
-        )
-        raise HTTPException(
-            502,
-            "PaddleOCR không xử lý được PDF. Kiểm tra backend log.",
-        ) from exc
+        except Exception as exc:
+            logger.exception(
+                "preview=ocr status=failed error_type=%s",
+                type(exc).__name__,
+            )
 
-    elapsed = time.perf_counter() - started
-    page_texts = extract_page_texts(raw_response)
+            raise HTTPException(
+                502,
+                "PaddleOCR không xử lý được PDF. "
+                "Kiểm tra backend log.",
+            ) from exc
 
-    if not page_texts and markdown:
-        page_texts = [markdown]
+        elapsed = time.perf_counter() - started
 
-    if not page_texts:
+    if not pages or not any(
+        page.strip() for page in pages
+    ):
         raise HTTPException(
             422,
             "PaddleOCR không trả về văn bản trang nào.",
@@ -338,22 +503,21 @@ async def recognize_and_preview(
         contents,
         filename,
         model,
-        list(page_texts),
+        pages,
         elapsed,
     )
 
     logger.info(
-        "preview=completed pages=%d questions=%d "
-        "ocr_seconds=%.2f preprocess_seconds=%.3f "
-        "parser_seconds=%.4f",
+        "preview=completed mode=%s pages=%d questions=%d",
+        _mode(),
         result["page_count"],
         result["question_count"],
-        elapsed,
-        result["timings"]["preprocess_seconds"],
-        result["timings"]["parser_seconds"],
     )
 
-    return {"success": True, "data": result}
+    return {
+        "success": True,
+        "data": result,
+    }
 
 
 @app.post("/api/parser-preview/reprocess")
@@ -362,90 +526,95 @@ async def reprocess_without_ocr(
     raw_page_texts_json: str = Form(...),
     model: str = Form("PaddleOCR-VL-1.6"),
 ) -> dict:
-    """Reapply PDF recovery and parser without calling PaddleOCR."""
-    if model not in ALLOWED_MODELS:
-        raise HTTPException(400, "Mô hình OCR không hợp lệ.")
+    _check_model(model)
 
-    filename = Path(file.filename or "test.pdf").name
-
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Chỉ chấp nhận PDF.")
-
-    contents = await file.read(MAX_PDF_BYTES + 1)
+    filename, contents = await _read_pdf(
+        file
+    )
 
     if (
-        len(contents) > MAX_PDF_BYTES
-        or not contents.startswith(b"%PDF-")
-    ):
-        raise HTTPException(
-            400,
-            "Tệp PDF không hợp lệ hoặc quá lớn.",
+        len(
+            raw_page_texts_json.encode("utf-8")
         )
-
-    if (
-        len(raw_page_texts_json.encode("utf-8"))
         > MAX_REPROCESS_TEXT_BYTES
     ):
-        raise HTTPException(413, "Dữ liệu OCR quá lớn.")
+        raise HTTPException(
+            413,
+            "Dữ liệu OCR quá lớn.",
+        )
 
     try:
-        original_texts = json.loads(raw_page_texts_json)
+        pages = json.loads(
+            raw_page_texts_json
+        )
+
     except json.JSONDecodeError as exc:
         raise HTTPException(
             422,
             "JSON OCR không hợp lệ.",
         ) from exc
 
-    if (
-        not isinstance(original_texts, list)
-        or not 1 <= len(original_texts) <= MAX_REPARSE_PAGES
-        or any(
-            not isinstance(page, str)
-            or len(page) > MAX_TEXT_PER_PAGE
-            for page in original_texts
-        )
-    ):
-        raise HTTPException(
-            422,
-            "Danh sách trang OCR không hợp lệ.",
-        )
+    _check_pages(pages)
 
     result = await run_in_threadpool(
         _rebuild_from_pdf,
         contents,
         filename,
         model,
-        original_texts,
+        pages,
         None,
     )
 
-    logger.info(
-        "preview=reprocess status=completed "
-        "questions=%d preprocess_seconds=%.3f "
-        "parser_seconds=%.4f ocr_calls=0 "
-        "verified_corrections=%s",
-        result["question_count"],
-        result["timings"]["preprocess_seconds"],
-        result["timings"]["parser_seconds"],
-        result["diagnostics"]["verified_correction_questions"],
-    )
-
-    return {"success": True, "data": result}
+    return {
+        "success": True,
+        "data": result,
+    }
 
 
 @app.post("/api/parser-preview/reparse")
-def reparse_existing_ocr(payload: ReparseRequest) -> dict:
-    """Legacy parser-only rerun; does not verify PDF geometry."""
-    result = _parse_result(
-        Path(payload.filename).name,
-        payload.model,
-        payload.page_texts,
-        None,
+def reparse_existing_ocr(
+    payload: ReparseRequest,
+) -> dict:
+    _check_model(payload.model)
+    _check_pages(payload.page_texts)
+
+    started = time.perf_counter()
+
+    pages = normalize_option_layout(
+        payload.page_texts
     )
 
-    logger.info(
-        "preview=reparse status=completed questions=%d",
-        result["question_count"],
+    questions = parse_text_questions(
+        pages,
+        Path(payload.filename).stem,
     )
 
-    return {"success": True, "data": result}
+    parsed = {
+        "raw_page_texts": payload.page_texts,
+        "page_texts": pages,
+        "questions": questions,
+        "diagnostics": {
+            "recovered_headings": [],
+            "pdf_fidelity_repairs": [],
+            "normalized_repairs": [],
+            "final_choice_repairs": [],
+            "verified_correction_questions": [],
+        },
+        "timings": {
+            "preprocess_seconds": None,
+            "parser_seconds": round(
+                time.perf_counter() - started,
+                4,
+            ),
+        },
+    }
+
+    return {
+        "success": True,
+        "data": _response(
+            Path(payload.filename).name,
+            payload.model,
+            parsed,
+            None,
+        ),
+    }
