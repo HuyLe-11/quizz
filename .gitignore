@@ -1,0 +1,24 @@
+﻿# Python
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# IntelliJ
+.idea/
+
+# Runtime data
+/backend/data/storage/
+
+# Frontend
+node_modules/
+dist/
+
+# Local secrets
+.env
+.env.local
+.env.*.local
+
+# Parser preview outputs
+*.parser-preview.json
+parser-preview.json
