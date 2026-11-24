@@ -1,8 +1,8 @@
 """Database-independent, conservative exam-question parser.
 
-Consumes page-ordered OCR Markdown or extracted PDF text. Section directives,
-reading passages, and answer-key pages are kept out of option text. Correct
-answers are NEVER inferred from choice order or stray answer-key tables.
+Recognizes page-ordered OCR Markdown. Keeps section instructions, passages,
+question boundaries and choice text distinct; never infers correct answers.
+Recognized answer-key material is excluded from question content.
 """
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ import unicodedata
 QUESTION_START = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*"
     r"(?:Câu(?:\s+hỏi|\s+số)?|Cau(?:\s+hoi|\s+so)?|Question|Q)\s*"
-    r"(\d{1,4})\s*[.:)\-]?\s*(?:\*\*|__)?\s*(.*)$",
-    re.I,
+    r"(\d{1,4})\s*[.:)\-]?\s*(?:\*\*|__)?\s*(.*)$", re.I,
 )
 NUMBERED_START = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?(\d{1,3})[.)]\s*"
@@ -21,124 +20,164 @@ NUMBERED_START = re.compile(
 )
 OPTION_START = re.compile(
     r"^\s*(?:[-*+•○◯◉●]\s*)?(?:\*\*|__)?\s*"
-    r"(?:\(([A-H])\)|([A-H])[.):])\s*(?:\*\*|__)?\s*(.*)$",
-    re.I,
+    r"(?:\(([A-H])\)|([A-H])[.):])\s*(?:\*\*|__)?\s*(.*)$", re.I,
 )
 TABLE_OPTION = re.compile(
     r"^\s*\|\s*(?:\*\*|__)?\s*([A-H])[.):]?\s*"
-    r"(?:\*\*|__)?\s*\|\s*(.*?)\s*\|\s*$",
-    re.I,
+    r"(?:\*\*|__)?\s*\|\s*(.*?)\s*\|\s*$", re.I,
 )
 INLINE_OPTION = re.compile(
-    r"(?<![\w])(?:\*\*|__)?([A-H])[.):]\s*(?:\*\*|__)?\s+",
-    re.I,
+    r"(?<![\w])(?:\*\*|__)?([A-H])[.):]\s*(?:\*\*|__)?\s+", re.I,
 )
 SECTION_START = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:"
-    r"Mark\s+the\s+letter\b|"
-    r"Read\s+the\s+(?:following\s+)?(?:passage|text)\b|"
-    r"Choose\s+the\s+(?:best|correct)\b|"
-    r"Select\s+the\s+(?:best|correct)\b|"
-    r"Identify\s+the\b|"
-    r"Chọn\s+(?:đáp\s+án|câu|phương\s+án)\b|"
-    r"Đọc\s+(?:đoạn|bài)\b"
-    r")",
-    re.I,
+    r"Mark\s+the\s+letter\b|Read\s+the\s+(?:following\s+)?(?:passage|text)\b|"
+    r"Choose\s+the\s+(?:best|correct)\b|Select\s+the\s+(?:best|correct)\b|"
+    r"Identify\s+the\b|Chọn\s+(?:đáp\s+án|câu|phương\s+án)\b|"
+    r"Đọc\s+(?:đoạn|bài)\b)", re.I,
 )
-ANSWER_KEY_PAGE = re.compile(
-    r"\b(?:ĐÁP\s+ÁN\s+THAM\s+KHẢO|"
-    r"BẢNG\s+ĐÁP\s+ÁN|ANSWER\s+KEY|"
-    r"KEY\s+TO\s+(?:THE\s+)?ANSWERS)\b",
-    re.I,
-)
-EXAM_END = re.compile(
-    r"^\s*[-–—\s]*HẾT\s*[-–—\s]*$",
-    re.I,
-)
+EXAM_END = re.compile(r"^\s*[-–—\s]*HẾT\s*[-–—\s]*$", re.I)
 PAGE_NOISE = re.compile(
-    r"^\s*(?:(?:Trang|Page)\s+\d+(?:\s*[/|]\s*\d+)?"
-    r"|\d+\s*/\s*\d+)\s*$",
-    re.I,
+    r"^\s*(?:(?:Trang|Page)\s+\d+(?:\s*[/|]\s*\d+)?|"
+    r"\d+\s*/\s*\d+)\s*$", re.I,
 )
 LMS_NOISE = re.compile(
-    r"^(?:Select\s+one\s*:|"
-    r"Select\s+all\s+that\s+apply\s*:|"
-    r"Complete|Not\s+yet\s+answered|"
-    r"Flag\s+question|"
+    r"^(?:Select\s+one\s*:|Select\s+all\s+that\s+apply\s*:|Complete|"
+    r"Not\s+yet\s+answered|Flag\s+question|"
     r"Mark\s+\d+(?:[.,]\d+)?\s+out\s+of\s+\d+(?:[.,]\d+)?|"
-    r"Question\s+text|Remove\s+flag)$",
-    re.I,
+    r"Question\s+text|Remove\s+flag)$", re.I,
 )
 FILL_IN_HINT = re.compile(
-    r"(?:điền\s+(?:vào|từ)|"
-    r"trả\s+lời\s+ngắn|fill\s+in|"
-    r"short\s+answer|_{3,})",
+    r"(?:điền\s+(?:vào|từ)|trả\s+lời\s+ngắn|fill\s+in|short\s+answer|_{3,})",
     re.I,
 )
-REFERENCE_MARKER_LINE = re.compile(
-    r"^[A-D](?:\s+[A-D]){0,3}$",
-    re.I,
-)
+REFERENCE_MARKER_LINE = re.compile(r"^[A-D](?:\s+[A-D]){0,3}$", re.I)
 EMBEDDED_DIRECTIVE = re.compile(
-    r"\s+(?=(?:\*\*|__)?"
-    r"(?:Mark\s+the\s+letter|"
-    r"Read\s+the\s+(?:following\s+)?passage)\b)",
-    re.I,
+    r"\s+(?=(?:\*\*|__)?(?:Mark\s+the\s+letter|"
+    r"Read\s+the\s+(?:following\s+)?passage)\b)", re.I,
 )
 OCR_PUNCTUATION = str.maketrans(
     "ＡＢＣＤＥＦＧＨａｂｃｄｅｆｇｈ．：）",
-    "ABCDEFGHabcdefgh.:)",
+    "ABCDEFGHabcdefgh.:)"
+)
+
+ANSWER_KEY_HEADING = re.compile(
+    r"(?:DAP\s+AN(?:\s+(?:THAM\s+KHAO|CHINH\s+THUC))?|"
+    r"BANG\s+DAP\s+AN|HUONG\s+DAN\s+CHAM|"
+    r"ANSWER\s+KEYS?|KEY\s+TO\s+(?:THE\s+)?ANSWERS?)",
+    re.I,
+)
+ANSWER_KEY_INSTITUTION = re.compile(
+    r"^(?:BO|SO|PHONG)\s+(?:(?:GIAO\s+DUC)|"
+    r"(?:GD\s*(?:VA|&)\s*DT))\b",
+    re.I,
 )
 
 
 def _slug(value: str) -> str:
     ascii_value = (
         unicodedata.normalize("NFKD", value)
-        .encode("ascii", "ignore")
-        .decode()
-        .lower()
+        .encode("ascii", "ignore").decode().lower()
     )
-    return (
-        re.sub(r"[^a-z0-9]+", "_", ascii_value).strip("_")
-        or "pdf_quiz"
-    )
+    return re.sub(r"[^a-z0-9]+", "_", ascii_value).strip("_") or "pdf_quiz"
 
 
 def _block(text: str) -> list[dict[str, str]]:
     text = text.strip()
     if not text:
         return []
-
-    if any(
-        marker in text
-        for marker in ("$", "\\(", "\\[", "\\underline")
-    ):
+    if any(marker in text for marker in ("$", "\\(", "\\[", "\\underline")):
         return [{"type": "latex", "value": text}]
-
     return [{"type": "text", "value": text}]
 
 
 def _clean_line(line: str) -> str:
     return (
-        line.replace("\ufeff", "")
-        .replace("\u200b", "")
-        .replace("\u00a0", " ")
-        .translate(OCR_PUNCTUATION)
-        .strip()
+        line.replace("\ufeff", "").replace("\u200b", "")
+        .replace("\u00a0", " ").translate(OCR_PUNCTUATION).strip()
     )
 
 
+def _normalize_heading(line: str) -> str:
+    """Normalize Vietnamese diacritics and heading markup."""
+    text = line.replace("Đ", "D").replace("đ", "d")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(
+        char for char in text
+        if not unicodedata.combining(char)
+    )
+    text = re.sub(r"<[^>]*>", " ", text)
+    text = re.sub(
+        r"^[\s#*_`~:;\-–—]+|[\s#*_`~:;\-–—]+$",
+        "",
+        text,
+    )
+    return " ".join(text.upper().split())
+
+
+def _is_answer_key_heading(line: str) -> bool:
+    normalized = _normalize_heading(line)
+    return bool(ANSWER_KEY_HEADING.fullmatch(normalized))
+
+
+def _strip_answer_key_pages(page_texts: list[str]) -> list[str]:
+    """Remove answer-key pages and same-page answer-key suffixes.
+
+    Answer-key pages may begin with institution metadata before
+    the answer-key heading. A same-page key can follow the final
+    question. Neither case may be appended to option D.
+    """
+    kept: list[str] = []
+
+    for page in page_texts:
+        lines = (page or "").splitlines()
+
+        heading = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if _is_answer_key_heading(line)
+            ),
+            None,
+        )
+
+        if heading is None:
+            kept.append(page or "")
+            continue
+
+        # No question before this header:
+        # the entire page is an answer sheet.
+        if not any(
+            QUESTION_START.match(_clean_line(line))
+            for line in lines[:heading]
+        ):
+            break
+
+        # Otherwise the key follows the exam on the same page.
+        cut_at = heading
+
+        probe = heading - 1
+        while probe >= 0 and not lines[probe].strip():
+            probe -= 1
+
+        if probe >= 0 and ANSWER_KEY_INSTITUTION.match(
+            _normalize_heading(lines[probe])
+        ):
+            cut_at = probe
+
+        kept.append("\n".join(lines[:cut_at]))
+        break
+
+    return kept
+
+
 def _split_embedded_directive(raw_line: str) -> list[str]:
-    """Separate a section heading merged after option D."""
     match = EMBEDDED_DIRECTIVE.search(raw_line)
 
-    if (
-        match
-        and re.search(
-            r"\bD[.):]\s+",
-            raw_line[:match.start()],
-            re.I,
-        )
+    if match and re.search(
+        r"\bD[.):]\s+",
+        raw_line[:match.start()],
+        re.I,
     ):
         return [
             raw_line[:match.start()],
@@ -166,7 +205,6 @@ def _inline_options(
     line: str,
     expected_first: str = "A",
 ) -> tuple[str, list[dict[str, str]]]:
-    """Split consecutive choices from one OCR line."""
     matches = list(INLINE_OPTION.finditer(line))
 
     if len(matches) < 2:
@@ -177,12 +215,9 @@ def _inline_options(
         for match in matches
     ]
 
-    if (
-        labels[0] != expected_first
-        or any(
-            ord(right) != ord(left) + 1
-            for left, right in zip(labels, labels[1:])
-        )
+    if labels[0] != expected_first or any(
+        ord(right) != ord(left) + 1
+        for left, right in zip(labels, labels[1:])
     ):
         return line, []
 
@@ -200,16 +235,12 @@ def _inline_options(
             "text": line[match.end():end].strip(),
         })
 
-    return (
-        line[:matches[0].start()].strip(),
-        choices,
-    )
+    return line[:matches[0].start()].strip(), choices
 
 
-def _match_option(
-    line: str,
-) -> tuple[str, str] | None:
+def _match_option(line: str) -> tuple[str, str] | None:
     table = TABLE_OPTION.match(line)
+
     if table:
         return (
             table.group(1).upper(),
@@ -217,12 +248,10 @@ def _match_option(
         )
 
     option = OPTION_START.match(line)
+
     if option:
         return (
-            (
-                option.group(1)
-                or option.group(2)
-            ).upper(),
+            (option.group(1) or option.group(2)).upper(),
             option.group(3).strip(),
         )
 
@@ -233,11 +262,7 @@ def _starts_complete_option_restart(
     lines: list[str],
     start: int,
 ) -> bool:
-    """Detect a fresh A-D run after an already completed question.
-
-    Do not treat an isolated duplicate A as a new question.
-    Require a complete consecutive sequence A, B, C, D.
-    """
+    """Detect a second A-D run after a completed question."""
     expected = ord("A")
 
     for raw in lines[start:start + 5]:
@@ -246,17 +271,11 @@ def _starts_complete_option_restart(
         if not line or _is_noise(line):
             continue
 
-        if (
-            QUESTION_START.match(line)
-            or SECTION_START.match(line)
-        ):
+        if QUESTION_START.match(line) or SECTION_START.match(line):
             return False
 
         label = chr(expected)
-        before, inline = _inline_options(
-            line,
-            label,
-        )
+        before, inline = _inline_options(line, label)
 
         if inline and not before:
             seen = [
@@ -266,10 +285,7 @@ def _starts_complete_option_restart(
         else:
             single = _match_option(line)
 
-            if (
-                single is None
-                or single[0] != label
-            ):
+            if single is None or single[0] != label:
                 return False
 
             seen = [single[0]]
@@ -303,17 +319,12 @@ def _new_section(start: str) -> dict:
         "reading": bool(
             re.match(r"^(?:Read|Đọc)\b", start, re.I)
         ),
-        "instruction_complete": (
-            start.rstrip("*_ ").endswith(".")
-        ),
+        "instruction_complete": start.rstrip("*_ ").endswith("."),
         "collecting": True,
     }
 
 
-def _append_section_line(
-    section: dict,
-    line: str,
-) -> None:
+def _append_section_line(section: dict, line: str) -> None:
     if not section["instruction_complete"]:
         section["instruction"] += "\n" + line
 
@@ -327,10 +338,7 @@ def _append_section_line(
         section["instruction"] += "\n" + line
 
 
-def _finish_question(
-    item: dict,
-    slug: str,
-) -> dict:
+def _finish_question(item: dict, slug: str) -> dict:
     prompt = item["prompt"].strip()
     choices = item["options"]
     instruction = item["section_instruction"]
@@ -365,12 +373,13 @@ def _finish_question(
         choice["label"]
         for choice in choices
     ]
+
     expected = [
         chr(ord("A") + index)
         for index in range(len(labels))
     ]
 
-    content = prompt + "\n" + "\n".join(
+    combined_text = prompt + "\n" + "\n".join(
         choice["text"]
         for choice in choices
     )
@@ -378,7 +387,7 @@ def _finish_question(
     has_underline_markers = bool(
         re.search(
             r"\\underline|<u(?:\s[^>]*)?>|\u0332",
-            content,
+            combined_text,
             re.I,
         )
     )
@@ -423,16 +432,10 @@ def _finish_question(
     )
 
     return {
-        "composite_id": (
-            f"{slug}_Q{item['number']:02d}"
-        ),
+        "composite_id": f"{slug}_Q{item['number']:02d}",
         "question_id": item["number"],
         "page_number": item["page_number"],
-        "type": (
-            "mcp"
-            if choices
-            else "fill_in"
-        ),
+        "type": "mcp" if choices else "fill_in",
         "multiple_choice": False,
         "question_content": _block(prompt),
         "explanation_content": [],
@@ -452,8 +455,8 @@ def _finish_question(
         "shared_passage": passage,
         "requires_source_image": requires_source_image,
         "parser_warning": (
-            "PaddleOCR không nhận diện được dòng tiêu đề "
-            "của câu này; hãy đối chiếu PDF gốc."
+            "PaddleOCR không nhận diện được dòng tiêu đề của câu này; "
+            "hãy đối chiếu PDF gốc."
             if recovered_missing_header
             else None
         ),
@@ -474,18 +477,19 @@ def parse_questions_by_pages(
     page_texts: list[str],
     exam_name: str,
 ) -> list[dict]:
-    """Parse OCR text without database, storage or network operations."""
+    """Parse ordered OCR pages without database or network operations."""
+
+    # Important: stop at the answer key BEFORE processing options.
+    page_texts = _strip_answer_key_pages(page_texts)
+
     groups: list[dict] = []
     current: dict | None = None
     current_option: dict | None = None
     section: dict | None = None
-
     in_code_fence = False
     previous_blank = False
     ended = False
 
-    # Preserve non-option lines following D until we can determine
-    # whether they belong to the current question or the next one.
     after_completed_options: list[str] = []
 
     def append(text: str) -> None:
@@ -562,23 +566,13 @@ def parse_questions_by_pages(
 
         page_text = page_text or ""
 
-        if (
-            ANSWER_KEY_PAGE.search(page_text[:1200])
-            and not QUESTION_START.search(page_text[:1200])
-        ):
-            current = None
-            current_option = None
-            break
-
         logical_lines = [
             part
             for raw in page_text.splitlines()
             for part in _split_embedded_directive(raw)
         ]
 
-        for line_index, raw_line in enumerate(
-            logical_lines
-        ):
+        for line_index, raw_line in enumerate(logical_lines):
             line = _clean_line(raw_line)
 
             if not line:
@@ -618,18 +612,15 @@ def parse_questions_by_pages(
                 else None
             )
 
-            if (
-                numbered is not None
-                and current is not None
-            ):
+            if numbered is not None and current is not None:
                 candidate = int(numbered.group(1))
+
                 next_number = (
-                    candidate
-                    == current["number"] + 1
+                    candidate == current["number"] + 1
                 )
+
                 new_page = (
-                    page_number
-                    != current["page_number"]
+                    page_number != current["page_number"]
                 )
 
                 if not (
@@ -656,9 +647,7 @@ def parse_questions_by_pages(
                     section["collecting"] = False
 
                 current = {
-                    "number": int(
-                        header.group(1)
-                    ),
+                    "number": int(header.group(1)),
                     "page_number": page_number,
                     "prompt": "",
                     "options": [],
@@ -695,10 +684,7 @@ def parse_questions_by_pages(
                 previous_blank = False
                 continue
 
-            if (
-                section is not None
-                and section["collecting"]
-            ):
+            if section is not None and section["collecting"]:
                 _append_section_line(
                     section,
                     line,
@@ -721,9 +707,6 @@ def parse_questions_by_pages(
                 previous_blank = False
                 continue
 
-            # Recovery when PaddleOCR omitted the next question heading:
-            # Q1 already has A-D, then we encounter a new question's stem
-            # followed by a second complete A-D run.
             if (
                 [
                     item["label"]
@@ -768,13 +751,11 @@ def parse_questions_by_pages(
 
                 if (
                     next_headers
-                    and int(
-                        next_headers[0].group(1)
-                    ) == next_number
+                    and int(next_headers[0].group(1))
+                    == next_number
                 ):
-                    # The next question has an explicit heading;
-                    # do not invent a duplicate question.
                     d_choice["text"] += trailing
+
                 else:
                     current = {
                         "number": next_number,
@@ -800,8 +781,7 @@ def parse_questions_by_pages(
                 after_completed_options.clear()
 
             next_label = chr(
-                ord("A")
-                + len(current["options"])
+                ord("A") + len(current["options"])
             )
 
             before, inline = _inline_options(
@@ -832,16 +812,11 @@ def parse_questions_by_pages(
             previous_blank = False
 
     if not groups:
-        # Retain reviewable drafts for OCR without question headings.
+        # Keep reviewable drafts for OCR pages without headings.
         for page_number, page_text in enumerate(
             page_texts,
             start=1,
         ):
-            if ANSWER_KEY_PAGE.search(
-                (page_text or "")[:1200]
-            ):
-                continue
-
             lines = [
                 _clean_line(value)
                 for value in (
@@ -867,8 +842,7 @@ def parse_questions_by_pages(
 
             for line in lines:
                 next_label = chr(
-                    ord("A")
-                    + len(recovered)
+                    ord("A") + len(recovered)
                 )
 
                 before, inline = _inline_options(
@@ -899,6 +873,7 @@ def parse_questions_by_pages(
                         "label": option[0],
                         "text": option[1],
                     }
+
                     recovered.append(last_option)
 
                 elif last_option is not None:
