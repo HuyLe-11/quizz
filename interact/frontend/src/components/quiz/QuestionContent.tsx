@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import python from "highlight.js/lib/languages/python";
@@ -19,191 +19,172 @@ hljs.registerLanguage("bash", bash);
 hljs.registerLanguage("json", json);
 
 interface QuestionContentProps {
-  content: string;
-  className?: string;
+    content: string;
+    className?: string;
 }
 
-/**
- * Render confirmed PDF underlines as CSS decoration, NOT Unicode U+0332.
- * The latter can render over the wrong glyph (or appear to duplicate one).
- * All letters remain exactly as returned by the backend.
- */
-function renderTextLine(text: string, key: string): React.ReactNode[] {
-  return splitUnderlineRuns(text).map((run, index) =>
-      run.underlined ? (
-          <span
-              key={`${key}-${index}`}
-              style={{
-                textDecorationLine: "underline",
-                textDecorationThickness: "1px",
-                textUnderlineOffset: "0.13em",
-                textDecorationSkipInk: "none",
-              }}
-          >
-        {run.text}
-      </span>
-      ) : (
-          <React.Fragment key={`${key}-${index}`}>
-            {run.text}
-          </React.Fragment>
-      ),
-  );
+function renderPlainText(text: string, key: string): ReactNode[] {
+    return text.split("\n").map((line, index) => (
+        <Fragment key={`${key}-${index}`}>
+            {index > 0 && <br />}
+            {splitUnderlineRuns(line).map((run, i) => (
+                <span key={i} style={run.underlined ? {
+                    textDecorationLine: "underline",
+                    textDecorationThickness: "1px",
+                    textUnderlineOffset: "0.13em",
+                    textDecorationSkipInk: "none",
+                } : undefined}>{run.text}</span>
+            ))}
+        </Fragment>
+    ));
 }
 
-function renderPlainText(text: string, key: string): React.ReactNode[] {
-  const lines = text.split("\n");
-  const result: React.ReactNode[] = [];
+function renderMath(
+    source: string,
+    displayMode: boolean,
+    key: string,
+): ReactNode {
+    try {
+        const html = katex.renderToString(source, {
+            displayMode,
+            throwOnError: false,
+            trust: false,
+        });
 
-  lines.forEach((line, index) => {
-    result.push(...renderTextLine(line, `${key}-line-${index}`));
-
-    if (index !== lines.length - 1) {
-      result.push(<br key={`${key}-break-${index}`} />);
+        return displayMode
+            ? <div key={key} className="my-2" dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={key} dangerouslySetInnerHTML={{ __html: html }} />;
+    } catch {
+        return <span key={key}>{source}</span>;
     }
-  });
-
-  return result;
 }
 
-function parseInline(text: string, keyPrefix: string): React.ReactNode[] {
-  const result: React.ReactNode[] = [];
-  const tokens = /\$\$(.*?)\$\$|\$(.*?)\$|!\[(.*?)\]\((.*?)\)/g;
+function parseInline(text: string, key: string): ReactNode[] {
+    const result: ReactNode[] = [];
+    const tokens = /\$\$([\s\S]*?)\$\$|\$([^\n]*?)\$|!\[(.*?)\]\((.*?)\)/g;
 
-  let previous = 0;
-  let match: RegExpExecArray | null;
-  let index = 0;
+    let previous = 0;
 
-  while ((match = tokens.exec(text)) !== null) {
-    if (match.index > previous) {
-      result.push(
-          ...renderPlainText(
-              text.slice(previous, match.index),
-              `${keyPrefix}-${index}-plain`,
-          ),
-      );
+    for (const match of text.matchAll(tokens)) {
+        const index = match.index;
+        const id = `${key}-${index}`;
+
+        result.push(
+            ...renderPlainText(
+                text.slice(previous, index),
+                `${id}-text`,
+            ),
+        );
+
+        if (match[1] !== undefined) {
+            result.push(renderMath(match[1], true, id));
+        } else if (match[2] !== undefined) {
+            result.push(renderMath(match[2], false, id));
+        } else if (match[4] !== undefined) {
+            result.push(
+                <img
+                    key={id}
+                    src={match[4]}
+                    alt={match[3] || "Image"}
+                    className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
+                    loading="lazy"
+                />,
+            );
+        }
+
+        previous = index + match[0].length;
     }
 
-    if (match[1] !== undefined) {
-      const html = katex.renderToString(match[1], {
-        displayMode: true,
-        throwOnError: false,
-      });
-
-      result.push(
-          <div
-              key={`${keyPrefix}-${index}-block-math`}
-              className="my-2"
-              dangerouslySetInnerHTML={{ __html: html }}
-          />,
-      );
-    } else if (match[2] !== undefined) {
-      const html = katex.renderToString(match[2], {
-        displayMode: false,
-        throwOnError: false,
-      });
-
-      result.push(
-          <span
-              key={`${keyPrefix}-${index}-inline-math`}
-              dangerouslySetInnerHTML={{ __html: html }}
-          />,
-      );
-    } else if (match[4] !== undefined) {
-      result.push(
-          <img
-              key={`${keyPrefix}-${index}-image`}
-              src={match[4]}
-              alt={match[3] || "hình ảnh"}
-              className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
-              loading="lazy"
-          />,
-      );
-    }
-
-    previous = tokens.lastIndex;
-    index++;
-  }
-
-  if (previous < text.length) {
     result.push(
-        ...renderPlainText(text.slice(previous), `${keyPrefix}-tail`),
+        ...renderPlainText(
+            text.slice(previous),
+            `${key}-tail`,
+        ),
     );
-  }
 
-  return result;
+    return result;
 }
 
-function parseContent(text: string): React.ReactNode[] {
-  if (!text) return [];
-
-  const result: React.ReactNode[] = [];
-  const codeBlocks = /```(\w*)\n([\s\S]*?)```/g;
-
-  let previous = 0;
-  let match: RegExpExecArray | null;
-  let index = 0;
-
-  while ((match = codeBlocks.exec(text)) !== null) {
-    if (match.index > previous) {
-      result.push(
-          ...parseInline(
-              text.slice(previous, match.index),
-              `before-code-${index}`,
-          ),
-      );
-    }
-
-    const language = match[1] || "plaintext";
-    const source = match[2];
-
-    // Escaped fallback prevents raw OCR/code from becoming executable HTML.
-    let highlighted = source
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+function renderCode(
+    language: string,
+    source: string,
+    key: string,
+): ReactNode {
+    let highlighted: string | null = null;
 
     try {
-      highlighted = hljs.getLanguage(language)
-          ? hljs.highlight(source, { language }).value
-          : hljs.highlightAuto(source).value;
+        highlighted = hljs.getLanguage(language)
+            ? hljs.highlight(source, { language }).value
+            : hljs.highlightAuto(source).value;
     } catch {
-      // Keep escaped text as the safe fallback.
+        // React escapes the original source when highlighting fails.
+    }
+
+    const className =
+        `hljs language-${language} block overflow-x-auto p-4 rounded-md text-sm`;
+
+    return (
+        <pre key={key} className="my-3 relative group">
+      <span className="absolute top-0 right-0 px-2 py-1 text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-secondary)]">
+        {language}
+      </span>
+
+            {highlighted === null
+                ? <code className={className}>{source}</code>
+                : <code
+                    className={className}
+                    dangerouslySetInnerHTML={{ __html: highlighted }}
+                />}
+    </pre>
+    );
+}
+
+function parseContent(text: string): ReactNode[] {
+    const result: ReactNode[] = [];
+    const codeBlocks = /```([\w+-]*)\r?\n([\s\S]*?)```/g;
+
+    let previous = 0;
+
+    for (const match of text.matchAll(codeBlocks)) {
+        const index = match.index;
+
+        result.push(
+            ...parseInline(
+                text.slice(previous, index),
+                `before-${index}`,
+            ),
+        );
+
+        result.push(
+            renderCode(
+                match[1] || "plaintext",
+                match[2],
+                `code-${index}`,
+            ),
+        );
+
+        previous = index + match[0].length;
     }
 
     result.push(
-        <pre key={`code-${index}`} className="my-3 relative group">
-        <code
-            className={`hljs language-${language} block overflow-x-auto p-4 rounded-md text-sm`}
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
-      </pre>,
+        ...parseInline(text.slice(previous), "tail"),
     );
 
-    previous = codeBlocks.lastIndex;
-    index++;
-  }
-
-  if (previous < text.length) {
-    result.push(
-        ...parseInline(text.slice(previous), `tail-${index}`),
-    );
-  }
-
-  return result;
+    return result;
 }
 
 export function QuestionContent({
-                                  content,
-                                  className = "",
+                                    content,
+                                    className = "",
                                 }: QuestionContentProps) {
-  const renderedContent = useMemo(
-      () => parseContent(content),
-      [content],
-  );
+    const rendered = useMemo(
+        () => parseContent(content || ""),
+        [content],
+    );
 
-  return (
-      <div className={`leading-relaxed ${className}`}>
-        {renderedContent}
-      </div>
-  );
+    return (
+        <div className={`leading-relaxed ${className}`}>
+            {rendered}
+        </div>
+    );
 }
