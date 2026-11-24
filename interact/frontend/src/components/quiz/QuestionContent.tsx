@@ -1,23 +1,22 @@
-import React, { useMemo } from 'react';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import python from 'highlight.js/lib/languages/python';
-import xml from 'highlight.js/lib/languages/xml';
-import css from 'highlight.js/lib/languages/css';
-import bash from 'highlight.js/lib/languages/bash';
-import json from 'highlight.js/lib/languages/json';
-import 'highlight.js/styles/github-dark.css'; // or appropriate theme
+import React, { useMemo } from "react";
+import hljs from "highlight.js/lib/core";
+import javascript from "highlight.js/lib/languages/javascript";
+import python from "highlight.js/lib/languages/python";
+import xml from "highlight.js/lib/languages/xml";
+import css from "highlight.js/lib/languages/css";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import "highlight.js/styles/github-dark.css";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import { splitUnderlineRuns } from "../../utils/underlineRuns";
 
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
-
-// Register common languages
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('xml', xml);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('json', json);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("json", json);
 
 interface QuestionContentProps {
   content: string;
@@ -25,137 +24,186 @@ interface QuestionContentProps {
 }
 
 /**
- * Parses content containing text, markdown images, code blocks, and LaTeX.
+ * Render confirmed PDF underlines as CSS decoration, NOT Unicode U+0332.
+ * The latter can render over the wrong glyph (or appear to duplicate one).
+ * All letters remain exactly as returned by the backend.
  */
+function renderTextLine(text: string, key: string): React.ReactNode[] {
+  return splitUnderlineRuns(text).map((run, index) =>
+      run.underlined ? (
+          <span
+              key={`${key}-${index}`}
+              style={{
+                textDecorationLine: "underline",
+                textDecorationThickness: "1px",
+                textUnderlineOffset: "0.13em",
+                textDecorationSkipInk: "none",
+              }}
+          >
+        {run.text}
+      </span>
+      ) : (
+          <React.Fragment key={`${key}-${index}`}>
+            {run.text}
+          </React.Fragment>
+      ),
+  );
+}
+
+function renderPlainText(text: string, key: string): React.ReactNode[] {
+  const lines = text.split("\n");
+  const result: React.ReactNode[] = [];
+
+  lines.forEach((line, index) => {
+    result.push(...renderTextLine(line, `${key}-line-${index}`));
+
+    if (index !== lines.length - 1) {
+      result.push(<br key={`${key}-break-${index}`} />);
+    }
+  });
+
+  return result;
+}
+
+function parseInline(text: string, keyPrefix: string): React.ReactNode[] {
+  const result: React.ReactNode[] = [];
+  const tokens = /\$\$(.*?)\$\$|\$(.*?)\$|!\[(.*?)\]\((.*?)\)/g;
+
+  let previous = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+
+  while ((match = tokens.exec(text)) !== null) {
+    if (match.index > previous) {
+      result.push(
+          ...renderPlainText(
+              text.slice(previous, match.index),
+              `${keyPrefix}-${index}-plain`,
+          ),
+      );
+    }
+
+    if (match[1] !== undefined) {
+      const html = katex.renderToString(match[1], {
+        displayMode: true,
+        throwOnError: false,
+      });
+
+      result.push(
+          <div
+              key={`${keyPrefix}-${index}-block-math`}
+              className="my-2"
+              dangerouslySetInnerHTML={{ __html: html }}
+          />,
+      );
+    } else if (match[2] !== undefined) {
+      const html = katex.renderToString(match[2], {
+        displayMode: false,
+        throwOnError: false,
+      });
+
+      result.push(
+          <span
+              key={`${keyPrefix}-${index}-inline-math`}
+              dangerouslySetInnerHTML={{ __html: html }}
+          />,
+      );
+    } else if (match[4] !== undefined) {
+      result.push(
+          <img
+              key={`${keyPrefix}-${index}-image`}
+              src={match[4]}
+              alt={match[3] || "hình ảnh"}
+              className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
+              loading="lazy"
+          />,
+      );
+    }
+
+    previous = tokens.lastIndex;
+    index++;
+  }
+
+  if (previous < text.length) {
+    result.push(
+        ...renderPlainText(text.slice(previous), `${keyPrefix}-tail`),
+    );
+  }
+
+  return result;
+}
+
 function parseContent(text: string): React.ReactNode[] {
   if (!text) return [];
 
-  const parts: React.ReactNode[] = [];
-  let currentText = text;
-  let keyIdx = 0;
+  const result: React.ReactNode[] = [];
+  const codeBlocks = /```(\w*)\n([\s\S]*?)```/g;
 
-  // Simple regex for code blocks: ```lang\ncode\n```
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
-  
-  // Parse code blocks first
-  let lastIdx = 0;
-  let match;
+  let previous = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
 
-  // We need to parse images and math inside the non-code text
-  const parseInline = (str: string, baseKey: number) => {
-    const inlineParts: React.ReactNode[] = [];
-    
-    // Regex for inline math: $math$, block math: $$math$$
-    // Regex for markdown images: ![alt](url)
-    const tokenRegex = /\$\$(.*?)\$\$|\$(.*?)\$|!\[(.*?)\]\((.*?)\)/g;
-    
-    let inlineLastIdx = 0;
-    let inlineMatch;
-    
-    while ((inlineMatch = tokenRegex.exec(str)) !== null) {
-      if (inlineMatch.index > inlineLastIdx) {
-        const textPart = str.substring(inlineLastIdx, inlineMatch.index);
-        if (textPart) {
-          // split by newline to preserve line breaks
-          const lines = textPart.split('\n');
-          lines.forEach((line, i) => {
-            if (line) inlineParts.push(<span key={`text-${baseKey}-${inlineLastIdx}-${i}`}>{line}</span>);
-            if (i < lines.length - 1) inlineParts.push(<br key={`br-${baseKey}-${inlineLastIdx}-${i}`} />);
-          });
-        }
-      }
-
-      if (inlineMatch[1]) {
-        // $$ block math $$
-        try {
-          const html = katex.renderToString(inlineMatch[1], { displayMode: true, throwOnError: false });
-          inlineParts.push(<div key={`math-block-${baseKey}-${inlineMatch.index}`} dangerouslySetInnerHTML={{ __html: html }} className="my-2" />);
-        } catch (e) {
-          inlineParts.push(<div key={`math-err-${baseKey}-${inlineMatch.index}`}>{inlineMatch[1]}</div>);
-        }
-      } else if (inlineMatch[2]) {
-        // $ inline math $
-        try {
-          const html = katex.renderToString(inlineMatch[2], { displayMode: false, throwOnError: false });
-          inlineParts.push(<span key={`math-inline-${baseKey}-${inlineMatch.index}`} dangerouslySetInnerHTML={{ __html: html }} />);
-        } catch (e) {
-          inlineParts.push(<span key={`math-err-${baseKey}-${inlineMatch.index}`}>{inlineMatch[2]}</span>);
-        }
-      } else if (inlineMatch[4]) {
-        // ![alt](url)
-        inlineParts.push(
-          <img 
-            key={`img-${baseKey}-${inlineMatch.index}`} 
-            src={inlineMatch[4]} 
-            alt={inlineMatch[3] || "hình ảnh"}
-            className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
-            loading="lazy"
-          />
-        );
-      }
-
-      inlineLastIdx = tokenRegex.lastIndex;
+  while ((match = codeBlocks.exec(text)) !== null) {
+    if (match.index > previous) {
+      result.push(
+          ...parseInline(
+              text.slice(previous, match.index),
+              `before-code-${index}`,
+          ),
+      );
     }
 
-    if (inlineLastIdx < str.length) {
-      const textPart = str.substring(inlineLastIdx);
-      const lines = textPart.split('\n');
-      lines.forEach((line, i) => {
-        if (line) inlineParts.push(<span key={`text-end-${baseKey}-${i}`}>{line}</span>);
-        if (i < lines.length - 1) inlineParts.push(<br key={`br-end-${baseKey}-${i}`} />);
-      });
-    }
+    const language = match[1] || "plaintext";
+    const source = match[2];
 
-    return inlineParts;
-  };
+    // Escaped fallback prevents raw OCR/code from becoming executable HTML.
+    let highlighted = source
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
 
-  while ((match = codeBlockRegex.exec(currentText)) !== null) {
-    if (match.index > lastIdx) {
-      parts.push(...parseInline(currentText.substring(lastIdx, match.index), keyIdx++));
-    }
-
-    const lang = match[1] || 'plaintext';
-    const code = match[2];
-    
-    // BUGFIX(F7): the fallback injected raw code into dangerouslySetInnerHTML (HTML/script in OCR
-    // text would execute). Start from an HTML-escaped copy; hljs output is already escaped.
-    let highlighted = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     try {
-      if (lang && hljs.getLanguage(lang)) {
-        highlighted = hljs.highlight(code, { language: lang }).value;
-      } else {
-        highlighted = hljs.highlightAuto(code).value;
-      }
-    } catch (e) {
-      // fallback
+      highlighted = hljs.getLanguage(language)
+          ? hljs.highlight(source, { language }).value
+          : hljs.highlightAuto(source).value;
+    } catch {
+      // Keep escaped text as the safe fallback.
     }
 
-    parts.push(
-      <pre key={`code-${keyIdx++}`} className="my-3 relative group">
-        {lang && <div className="absolute top-0 right-0 px-2 py-1 text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-secondary)] rounded-bl-md rounded-tr-md border-b border-l border-[var(--color-border)] opacity-50 group-hover:opacity-100 transition-opacity">{lang}</div>}
-        <code dangerouslySetInnerHTML={{ __html: highlighted }} className={`hljs language-${lang} block overflow-x-auto p-4 rounded-md text-sm`} />
-      </pre>
+    result.push(
+        <pre key={`code-${index}`} className="my-3 relative group">
+        <code
+            className={`hljs language-${language} block overflow-x-auto p-4 rounded-md text-sm`}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      </pre>,
     );
 
-    lastIdx = codeBlockRegex.lastIndex;
+    previous = codeBlocks.lastIndex;
+    index++;
   }
 
-  if (lastIdx < currentText.length) {
-    parts.push(...parseInline(currentText.substring(lastIdx), keyIdx++));
+  if (previous < text.length) {
+    result.push(
+        ...parseInline(text.slice(previous), `tail-${index}`),
+    );
   }
 
-  return parts;
+  return result;
 }
 
-/**
- * Renders rich content for questions, options, and explanations.
- */
-export function QuestionContent({ content, className = "" }: QuestionContentProps) {
-  const renderedContent = useMemo(() => parseContent(content), [content]);
+export function QuestionContent({
+                                  content,
+                                  className = "",
+                                }: QuestionContentProps) {
+  const renderedContent = useMemo(
+      () => parseContent(content),
+      [content],
+  );
 
   return (
-    <div className={`leading-relaxed ${className}`}>
-      {renderedContent}
-    </div>
+      <div className={`leading-relaxed ${className}`}>
+        {renderedContent}
+      </div>
   );
 }
