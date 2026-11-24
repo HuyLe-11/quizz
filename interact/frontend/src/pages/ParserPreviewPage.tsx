@@ -22,6 +22,7 @@ type PreviewQuestion = {
     shared_passage?: string;
     parse_fallback?: boolean;
     requires_source_image?: boolean;
+    parser_warning?: string | null;
 };
 
 type PreviewData = {
@@ -29,16 +30,23 @@ type PreviewData = {
     model: string;
     page_count: number;
     page_texts: string[];
+    raw_page_texts?: string[];
     question_count: number;
     questions: PreviewQuestion[];
     diagnostics: {
         incomplete_options: number[];
         contaminated_options: number[];
         needs_review: number[];
+        normalized_repairs?: Array<{
+            question_number: number;
+            kind: string;
+            page_number: number;
+        }>;
     };
     timings: {
         ocr_seconds: number | null;
         parser_seconds: number;
+        preprocess_seconds?: number | null;
     };
 };
 
@@ -57,23 +65,19 @@ function blockText(blocks: TextBlock[] = []): string {
 
 async function requestPreview(
     endpoint: string,
-    body: FormData | Record<string, unknown>,
+    body: FormData,
 ): Promise<PreviewData> {
-    const isForm = body instanceof FormData;
-
     let response: Response;
 
     try {
         response = await fetch(`${API}/${endpoint}`, {
             method: "POST",
-            headers: isForm
-                ? undefined
-                : { "Content-Type": "application/json" },
-            body: isForm ? body : JSON.stringify(body),
+            body,
         });
-    } catch {
+    } catch (cause) {
         throw new Error(
             "Không kết nối được Parser Preview backend tại 127.0.0.1:8000.",
+            { cause },
         );
     }
 
@@ -94,6 +98,7 @@ async function requestPreview(
 
 export function ParserPreviewPage() {
     const [file, setFile] = useState<File | null>(null);
+    const [sourceFile, setSourceFile] = useState<File | null>(null);
     const [model, setModel] = useState("PaddleOCR-VL-1.6");
     const [preview, setPreview] = useState<PreviewData | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
@@ -118,10 +123,13 @@ export function ParserPreviewPage() {
             const data = await requestPreview("ocr", form);
 
             setPreview(data);
+            setSourceFile(file);
             setActiveIndex(0);
         } catch (cause) {
             setError(
-                cause instanceof Error ? cause.message : "Có lỗi không xác định.",
+                cause instanceof Error
+                    ? cause.message
+                    : "Có lỗi không xác định.",
             );
         } finally {
             setLoading(false);
@@ -129,27 +137,47 @@ export function ParserPreviewPage() {
         }
     }
 
-    async function reparse() {
-        if (!preview || loading) return;
+    async function reprocess() {
+        if (!preview || !sourceFile || loading) return;
+
+        const originalOcr = preview.raw_page_texts;
+
+        if (!originalOcr?.length) {
+            setError(
+                "Kết quả hiện tại không chứa OCR nguyên bản để đối chiếu lại PDF.",
+            );
+            return;
+        }
 
         setLoading(true);
-        setOperation("Đang chạy lại parser, không gọi PaddleOCR...");
+        setOperation(
+            "Đang đọc lại tọa độ PDF và chạy parser, KHÔNG gọi PaddleOCR...",
+        );
         setError(null);
 
         try {
-            const data = await requestPreview("reparse", {
-                filename: preview.filename,
-                model: preview.model,
-                page_texts: preview.page_texts,
-            });
+            const form = new FormData();
+            form.append("file", sourceFile);
+            form.append("model", preview.model);
+            form.append(
+                "raw_page_texts_json",
+                JSON.stringify(originalOcr),
+            );
+
+            const data = await requestPreview("reprocess", form);
 
             setPreview(data);
-            setActiveIndex((old) =>
-                Math.min(old, Math.max(0, data.questions.length - 1)),
+            setActiveIndex((previous) =>
+                Math.min(
+                    previous,
+                    Math.max(0, data.questions.length - 1),
+                ),
             );
         } catch (cause) {
             setError(
-                cause instanceof Error ? cause.message : "Có lỗi không xác định.",
+                cause instanceof Error
+                    ? cause.message
+                    : "Có lỗi không xác định.",
             );
         } finally {
             setLoading(false);
@@ -160,9 +188,10 @@ export function ParserPreviewPage() {
     function exportJson() {
         if (!preview) return;
 
-        const blob = new Blob([JSON.stringify(preview, null, 2)], {
-            type: "application/json",
-        });
+        const blob = new Blob(
+            [JSON.stringify(preview, null, 2)],
+            { type: "application/json" },
+        );
 
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
@@ -176,7 +205,11 @@ export function ParserPreviewPage() {
 
     const question = preview?.questions[activeIndex] ?? null;
     const pageNumber = question?.page_number ?? 1;
-    const rawPage = preview?.page_texts[pageNumber - 1] ?? "";
+
+    const rawPage =
+        preview?.raw_page_texts?.[pageNumber - 1] ??
+        preview?.page_texts[pageNumber - 1] ??
+        "";
 
     const problems = preview
         ? new Set([
@@ -190,9 +223,11 @@ export function ParserPreviewPage() {
         <div className="mx-auto max-w-7xl px-5 py-8 text-[var(--color-text)]">
             <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold">Parser Preview</h1>
+                    <h1 className="text-2xl font-bold">
+                        Parser Preview
+                    </h1>
                     <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                        PaddleOCR thật · Không lưu database · Chạy lại parser tức thì
+                        PaddleOCR thật · Không lưu database · Chạy lại toàn bộ parser và tọa độ PDF không cần OCR
                     </p>
                 </div>
 
@@ -210,26 +245,36 @@ export function ParserPreviewPage() {
             >
                 <div className="grid gap-4 md:grid-cols-[1fr_260px]">
                     <label className="block text-sm">
-                        <span className="mb-2 block font-medium">File PDF</span>
+            <span className="mb-2 block font-medium">
+              File PDF
+            </span>
                         <input
                             type="file"
                             accept=".pdf,application/pdf"
-                            onChange={(event) => {
-                                setFile(event.target.files?.[0] ?? null);
-                            }}
+                            onChange={(event) =>
+                                setFile(event.target.files?.[0] ?? null)
+                            }
                             className="w-full rounded-md border border-[var(--color-border)] p-2"
                         />
                     </label>
 
                     <label className="block text-sm">
-                        <span className="mb-2 block font-medium">Mô hình OCR</span>
+            <span className="mb-2 block font-medium">
+              Mô hình OCR
+            </span>
                         <select
                             value={model}
-                            onChange={(event) => setModel(event.target.value)}
+                            onChange={(event) =>
+                                setModel(event.target.value)
+                            }
                             className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2"
                         >
-                            <option value="PaddleOCR-VL-1.6">PaddleOCR-VL-1.6</option>
-                            <option value="PP-OCRv6">PP-OCRv6</option>
+                            <option value="PaddleOCR-VL-1.6">
+                                PaddleOCR-VL-1.6
+                            </option>
+                            <option value="PP-OCRv6">
+                                PP-OCRv6
+                            </option>
                         </select>
                     </label>
                 </div>
@@ -245,11 +290,11 @@ export function ParserPreviewPage() {
 
                     <button
                         type="button"
-                        disabled={!preview || loading}
-                        onClick={reparse}
+                        disabled={!preview || !sourceFile || loading}
+                        onClick={() => void reprocess()}
                         className="rounded-lg border border-[var(--color-primary)] px-5 py-2.5 font-medium text-[var(--color-primary)] disabled:opacity-50"
                     >
-                        Phân tích lại — không OCR
+                        Đối chiếu PDF + phân tích lại — không OCR
                     </button>
 
                     <button
@@ -297,23 +342,52 @@ export function ParserPreviewPage() {
                                 <p className="text-xs text-[var(--color-text-muted)]">
                                     {label}
                                 </p>
-                                <p className="mt-1 text-xl font-bold">{value}</p>
+                                <p className="mt-1 text-xl font-bold">
+                                    {value}
+                                </p>
                             </div>
                         ))}
                     </div>
 
                     <p className="mb-5 text-sm text-[var(--color-text-secondary)]">
                         {preview.timings.ocr_seconds === null
-                            ? "Lần này chỉ chạy parser, không phát sinh yêu cầu OCR."
+                            ? "Lượt này không gọi PaddleOCR."
                             : `PaddleOCR: ${preview.timings.ocr_seconds.toFixed(2)} giây.`}
-                        {" "}Thiếu A–D: {preview.diagnostics.incomplete_options.join(", ") || "Không"}.
-                        {" "}Tiêu đề lẫn vào đáp án:{" "}
-                        {preview.diagnostics.contaminated_options.join(", ") || "Không"}.
+
+                        {preview.timings.preprocess_seconds != null
+                            ? ` Đối chiếu PDF: ${preview.timings.preprocess_seconds.toFixed(3)} giây.`
+                            : ""}
+
+                        {` Thiếu A–D: ${
+                            preview.diagnostics.incomplete_options.join(", ") || "Không"
+                        }.`}
+
+                        {` Tiêu đề lẫn vào đáp án: ${
+                            preview.diagnostics.contaminated_options.join(", ") || "Không"
+                        }.`}
                     </p>
+
+                    {Boolean(
+                        preview.diagnostics.normalized_repairs?.length,
+                    ) && (
+                        <p className="mb-5 text-sm text-[var(--color-text-secondary)]">
+                            Đã đối chiếu lại:{" "}
+                            {preview.diagnostics.normalized_repairs
+                                ?.map(
+                                    (item) =>
+                                        `Câu ${item.question_number} (${item.kind})`,
+                                )
+                                .join(", ")}
+                            .
+                        </p>
+                    )}
 
                     <div className="grid gap-5 lg:grid-cols-[230px_minmax(0,1fr)]">
                         <aside className="self-start rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 lg:sticky lg:top-20">
-                            <h2 className="mb-3 font-semibold">Danh sách câu hỏi</h2>
+                            <h2 className="mb-3 font-semibold">
+                                Danh sách câu hỏi
+                            </h2>
+
                             <div className="grid max-h-[65vh] grid-cols-5 gap-2 overflow-y-auto lg:grid-cols-4">
                                 {preview.questions.map((item, index) => (
                                     <button
@@ -341,16 +415,20 @@ export function ParserPreviewPage() {
 
                         <section className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
                             {!question ? (
-                                <p>Parser chưa nhận diện được câu hỏi nào.</p>
+                                <p>
+                                    Parser chưa nhận diện được câu hỏi nào.
+                                </p>
                             ) : (
                                 <>
                                     <div className="mb-5 flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] pb-4">
                                         <h2 className="text-xl font-bold">
                                             Câu {question.question_id}
                                         </h2>
+
                                         <span className="text-sm text-[var(--color-text-muted)]">
                       Trang {pageNumber} · {question.type}
                     </span>
+
                                         {question.parse_fallback && (
                                             <span className="rounded-md border border-amber-500/50 px-2 py-1 text-xs">
                         Cần đối chiếu PDF gốc
@@ -374,13 +452,17 @@ export function ParserPreviewPage() {
                                             <p className="mb-2 text-xs font-semibold uppercase text-[var(--color-text-muted)]">
                                                 Đoạn đọc chung
                                             </p>
-                                            <QuestionContent content={question.shared_passage} />
+                                            <QuestionContent
+                                                content={question.shared_passage}
+                                            />
                                         </div>
                                     )}
 
                                     <div className="mb-5 text-base font-medium">
                                         <QuestionContent
-                                            content={blockText(question.question_content)}
+                                            content={blockText(
+                                                question.question_content,
+                                            )}
                                         />
                                     </div>
 
@@ -390,10 +472,15 @@ export function ParserPreviewPage() {
                                                 key={option.label}
                                                 className="flex gap-3 rounded-lg border border-[var(--color-border)] px-4 py-3"
                                             >
-                                                <span className="font-bold">{option.label}.</span>
+                        <span className="font-bold">
+                          {option.label}.
+                        </span>
+
                                                 <div className="min-w-0 flex-1">
                                                     <QuestionContent
-                                                        content={blockText(option.content)}
+                                                        content={blockText(
+                                                            option.content,
+                                                        )}
                                                     />
                                                 </div>
                                             </div>
@@ -403,15 +490,20 @@ export function ParserPreviewPage() {
                                     <div className="mt-6 border-t border-[var(--color-border)] pt-4">
                                         <button
                                             type="button"
-                                            onClick={() => setShowRawOcr(!showRawOcr)}
+                                            onClick={() =>
+                                                setShowRawOcr(!showRawOcr)
+                                            }
                                             className="text-sm font-medium text-[var(--color-primary)]"
                                         >
-                                            {showRawOcr ? "Ẩn OCR gốc" : "Xem OCR gốc của trang"}
+                                            {showRawOcr
+                                                ? "Ẩn OCR gốc"
+                                                : "Xem OCR gốc của trang"}
                                         </button>
 
                                         {showRawOcr && (
                                             <pre className="mt-3 max-h-[440px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[var(--color-bg)] p-4 text-xs">
-                        {rawPage || "Trang không có văn bản OCR."}
+                        {rawPage ||
+                            "Trang không có văn bản OCR."}
                       </pre>
                                         )}
                                     </div>
@@ -420,7 +512,9 @@ export function ParserPreviewPage() {
                                         <button
                                             type="button"
                                             disabled={activeIndex === 0}
-                                            onClick={() => setActiveIndex(activeIndex - 1)}
+                                            onClick={() =>
+                                                setActiveIndex(activeIndex - 1)
+                                            }
                                             className="rounded-lg border border-[var(--color-border)] px-4 py-2 disabled:opacity-40"
                                         >
                                             Câu trước
@@ -428,8 +522,13 @@ export function ParserPreviewPage() {
 
                                         <button
                                             type="button"
-                                            disabled={activeIndex >= preview.questions.length - 1}
-                                            onClick={() => setActiveIndex(activeIndex + 1)}
+                                            disabled={
+                                                activeIndex >=
+                                                preview.questions.length - 1
+                                            }
+                                            onClick={() =>
+                                                setActiveIndex(activeIndex + 1)
+                                            }
                                             className="rounded-lg border border-[var(--color-border)] px-4 py-2 disabled:opacity-40"
                                         >
                                             Câu tiếp

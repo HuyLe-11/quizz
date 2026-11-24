@@ -1,10 +1,12 @@
-"""Local Parser Preview: real PaddleOCR, no SQLite or Supabase writes.
+"""Local Parser Preview: real PaddleOCR, no database persistence.
 
-Start with QUIZPDF_PARSER_PREVIEW=1 and bind Uvicorn to 127.0.0.1.
-The browser holds enhanced OCR text for no-OCR reparsing.
+Run with QUIZPDF_PARSER_PREVIEW=1, bound to localhost.
+The reprocess endpoint reuses original OCR and PDF bytes without
+calling PaddleOCR again.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -48,15 +50,17 @@ from backend.engine.parser_recovery import (
 from backend.engine.pdf_fidelity import (
     enhance_ocr_with_pdf_geometry,
 )
+from backend.engine.parser_text_normalizer import (
+    normalize_pdf_backed_ocr,
+)
 from backend.engine.quiz_parser import (
     parse_questions_by_pages,
 )
 
-logger = logging.getLogger(
-    "quizpdf.parser_preview"
-)
+logger = logging.getLogger("quizpdf.parser_preview")
 
 MAX_PDF_BYTES = 30 * 1024 * 1024
+MAX_REPROCESS_TEXT_BYTES = 20 * 1024 * 1024
 MAX_REPARSE_PAGES = 100
 MAX_TEXT_PER_PAGE = 1_000_000
 
@@ -92,9 +96,7 @@ class ReparseRequest(BaseModel):
     page_texts: list[str]
 
 
-def _question_text(
-    blocks: Any,
-) -> str:
+def _question_text(blocks: Any) -> str:
     if not isinstance(blocks, list):
         return ""
 
@@ -113,6 +115,8 @@ def _parse_result(
     *,
     recovered_headings: list[dict] | None = None,
     fidelity_repairs: list[dict] | None = None,
+    normalized_repairs: list[dict] | None = None,
+    preprocess_seconds: float | None = None,
 ) -> dict:
     if model not in ALLOWED_MODELS:
         raise HTTPException(
@@ -156,7 +160,6 @@ def _parse_result(
 
     for question in questions:
         number = question["question_id"]
-
         choices = question.get(
             "mcp_options",
             [],
@@ -185,8 +188,6 @@ def _parse_result(
         "filename": filename,
         "model": model,
         "page_count": len(page_texts),
-        # Includes verified restorations and correct underlines.
-        # Frontend sends this back for parser-only reruns.
         "page_texts": page_texts,
         "question_count": len(questions),
         "questions": questions,
@@ -194,12 +195,9 @@ def _parse_result(
             "incomplete_options": incomplete,
             "contaminated_options": contaminated,
             "needs_review": needs_review,
-            "recovered_headings": (
-                recovered_headings or []
-            ),
-            "pdf_fidelity_repairs": (
-                fidelity_repairs or []
-            ),
+            "recovered_headings": recovered_headings or [],
+            "pdf_fidelity_repairs": fidelity_repairs or [],
+            "normalized_repairs": normalized_repairs or [],
         },
         "timings": {
             "ocr_seconds": (
@@ -208,11 +206,69 @@ def _parse_result(
                 else None
             ),
             "parser_seconds": round(
-                parse_seconds,
-                4,
+                parse_seconds, 4
+            ),
+            "preprocess_seconds": (
+                round(preprocess_seconds, 4)
+                if preprocess_seconds is not None
+                else None
             ),
         },
     }
+
+
+def _rebuild_from_pdf(
+    contents: bytes,
+    filename: str,
+    model: str,
+    original_texts: list[str],
+    ocr_seconds: float | None,
+) -> dict:
+    """Replay all local transformations without running OCR."""
+    preprocess_started = time.perf_counter()
+
+    enhanced, recovered = recover_pdf_headings(
+        contents,
+        original_texts,
+    )
+
+    enriched, fidelity_repairs = (
+        enhance_ocr_with_pdf_geometry(
+            contents,
+            enhanced,
+        )
+    )
+
+    stabilized, normalized_repairs = (
+        normalize_pdf_backed_ocr(
+            contents,
+            enriched,
+        )
+    )
+
+    preprocess_seconds = (
+        time.perf_counter() - preprocess_started
+    )
+
+    result = _parse_result(
+        filename,
+        model,
+        stabilized,
+        ocr_seconds,
+        recovered_headings=[
+            item.as_dict()
+            for item in recovered
+        ],
+        fidelity_repairs=[
+            item.as_dict()
+            for item in fidelity_repairs
+        ],
+        normalized_repairs=normalized_repairs,
+        preprocess_seconds=preprocess_seconds,
+    )
+
+    result["raw_page_texts"] = original_texts
+    return result
 
 
 @app.get("/api/health")
@@ -232,7 +288,7 @@ async def recognize_and_preview(
     file: UploadFile = File(...),
     model: str = Form("PaddleOCR-VL-1.6"),
 ):
-    """Run real OCR, restore PDF evidence, then parse."""
+    """Call real PaddleOCR once, then run the local parser."""
     if model not in ALLOWED_MODELS:
         raise HTTPException(
             400,
@@ -259,9 +315,7 @@ async def recognize_and_preview(
             "PDF vượt quá 30 MB.",
         )
 
-    if not contents.startswith(
-        b"%PDF-"
-    ):
+    if not contents.startswith(b"%PDF-"):
         raise HTTPException(
             400,
             "Nội dung PDF không hợp lệ.",
@@ -273,12 +327,8 @@ async def recognize_and_preview(
         with tempfile.TemporaryDirectory(
             prefix="quizpdf-parser-preview-"
         ) as directory:
-            path = (
-                Path(directory) / "source.pdf"
-            )
-            path.write_bytes(
-                contents
-            )
+            path = Path(directory) / "source.pdf"
+            path.write_bytes(contents)
 
             markdown, raw_response = (
                 await run_in_threadpool(
@@ -292,7 +342,6 @@ async def recognize_and_preview(
         logger.warning(
             "preview=ocr status=timeout"
         )
-
         raise HTTPException(
             504,
             "PaddleOCR vượt thời gian chờ.",
@@ -303,7 +352,6 @@ async def recognize_and_preview(
             "preview=ocr status=provider_error http=%d",
             exc.status_code,
         )
-
         raise HTTPException(
             502,
             f"PaddleOCR trả HTTP {exc.status_code}.",
@@ -314,14 +362,13 @@ async def recognize_and_preview(
             "preview=ocr status=failed error_type=%s",
             type(exc).__name__,
         )
-
         raise HTTPException(
             502,
             "PaddleOCR không xử lý được PDF. "
             "Kiểm tra backend log.",
         ) from exc
 
-    elapsed = (
+    ocr_seconds = (
         time.perf_counter() - started
     )
 
@@ -338,58 +385,119 @@ async def recognize_and_preview(
             "PaddleOCR không trả về văn bản trang nào.",
         )
 
-    # Keep original provider text for debugging.
-    original_texts = list(
-        page_texts
-    )
+    original_texts = list(page_texts)
 
-    # Step 1: Restore question headings from PDF text.
-    enhanced, recovered = (
-        await run_in_threadpool(
-            recover_pdf_headings,
-            contents,
-            page_texts,
-        )
-    )
-
-    # Step 2: Recover exact underlining, spatial A-D labels,
-    # and missing option D from verified PDF geometry.
-    enriched, fidelity_repairs = (
-        await run_in_threadpool(
-            enhance_ocr_with_pdf_geometry,
-            contents,
-            enhanced,
-        )
+    result = await run_in_threadpool(
+        _rebuild_from_pdf,
+        contents,
+        filename,
+        model,
+        original_texts,
+        ocr_seconds,
     )
 
     logger.info(
-        "preview=ocr status=completed "
-        "pages=%d ocr_seconds=%.2f "
-        "headings_recovered=%d "
-        "pdf_fidelity_repairs=%d",
-        len(page_texts),
-        elapsed,
-        len(recovered),
-        len(fidelity_repairs),
+        "preview=completed pages=%d questions=%d "
+        "ocr_seconds=%.2f preprocess_seconds=%.3f "
+        "parser_seconds=%.4f",
+        result["page_count"],
+        result["question_count"],
+        ocr_seconds,
+        result["timings"]["preprocess_seconds"],
+        result["timings"]["parser_seconds"],
     )
 
-    result = _parse_result(
+    return {
+        "success": True,
+        "data": result,
+    }
+
+
+@app.post("/api/parser-preview/reprocess")
+async def reprocess_without_ocr(
+    file: UploadFile = File(...),
+    raw_page_texts_json: str = Form(...),
+    model: str = Form("PaddleOCR-VL-1.6"),
+):
+    """Rebuild from original OCR and PDF without another OCR API call."""
+    if model not in ALLOWED_MODELS:
+        raise HTTPException(
+            400,
+            "Mô hình OCR không hợp lệ.",
+        )
+
+    filename = Path(
+        file.filename or "test.pdf"
+    ).name
+
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            400,
+            "Chỉ chấp nhận PDF.",
+        )
+
+    contents = await file.read(
+        MAX_PDF_BYTES + 1
+    )
+
+    if (
+        len(contents) > MAX_PDF_BYTES
+        or not contents.startswith(b"%PDF-")
+    ):
+        raise HTTPException(
+            400,
+            "Tệp PDF không hợp lệ hoặc quá lớn.",
+        )
+
+    if (
+        len(raw_page_texts_json.encode("utf-8"))
+        > MAX_REPROCESS_TEXT_BYTES
+    ):
+        raise HTTPException(
+            413,
+            "Dữ liệu OCR quá lớn.",
+        )
+
+    try:
+        original_texts = json.loads(
+            raw_page_texts_json
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            422,
+            "JSON OCR không hợp lệ.",
+        ) from exc
+
+    if (
+        not isinstance(original_texts, list)
+        or not 1 <= len(original_texts) <= MAX_REPARSE_PAGES
+        or any(
+            not isinstance(page, str)
+            or len(page) > MAX_TEXT_PER_PAGE
+            for page in original_texts
+        )
+    ):
+        raise HTTPException(
+            422,
+            "Danh sách trang OCR không hợp lệ.",
+        )
+
+    result = await run_in_threadpool(
+        _rebuild_from_pdf,
+        contents,
         filename,
         model,
-        enriched,
-        elapsed,
-        recovered_headings=[
-            item.as_dict()
-            for item in recovered
-        ],
-        fidelity_repairs=[
-            item.as_dict()
-            for item in fidelity_repairs
-        ],
+        original_texts,
+        None,
     )
 
-    result["raw_page_texts"] = (
-        original_texts
+    logger.info(
+        "preview=reprocess status=completed "
+        "questions=%d preprocess_seconds=%.3f "
+        "parser_seconds=%.4f ocr_calls=0",
+        result["question_count"],
+        result["timings"]["preprocess_seconds"],
+        result["timings"]["parser_seconds"],
     )
 
     return {
@@ -402,7 +510,7 @@ async def recognize_and_preview(
 def reparse_existing_ocr(
     payload: ReparseRequest,
 ):
-    """Parse enhanced OCR text without OCR or database access."""
+    """Legacy parser-only reparse; does not recompute PDF geometry."""
     result = _parse_result(
         Path(payload.filename).name,
         payload.model,
