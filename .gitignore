@@ -1,38 +1,53 @@
-﻿# Python
-**/__pycache__/
-*.py[cod]
+﻿# Python generated files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
 .venv/
+venv/
 
-# IntelliJ
+# IDE configuration
 .idea/
+.vscode/
+*.iml
 
-# Runtime data
-/backend/data/storage/
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
 
-# Frontend
+# Frontend generated files
 node_modules/
 dist/
+*.tsbuildinfo
 
-# Local secrets
-.env
-.env.local
-.env.*.local
+# SQLite runtime
+/backend/data/*.sqlite3
+/backend/data/*.sqlite3-*
+/backend/data/*.db
+/backend/data/generated_exams.json
+
+# Uploaded PDFs and generated images
+/backend/data/storage/
 
 # Parser preview outputs
 *.parser-preview.json
 parser-preview.json
-*.pyc
-**/.pytest_cache/
-**/.venv/
-**/.env
-**/.env.*
-!**/.env.example
-backend/data/*.sqlite3
-backend/data/*.sqlite3-*
-backend/data/*.db
-backend/data/storage/
-backend/data/generated_exams.json
-interact/frontend/node_modules/
-interact/frontend/dist/
+
+# Local source snapshots
+/feat-parser-core-source.zip
+/feat-supabase-auth-source.zip
+
+# Logs
 *.log
+
+# Operating system files
+.DS_Store
+Thumbs.db

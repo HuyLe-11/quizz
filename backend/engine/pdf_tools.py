@@ -1,36 +1,20 @@
-"""PDF question crops and conservative red-ink answer-mark detection."""
+# PDF question crops and conservative red-ink answer-mark detection.
 from __future__ import annotations
 
 import hashlib
 import json
 import math
 import os
-import re
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import cv2
-import pymupdf as fitz
+import fitz
 import numpy as np
 
-
-QUESTION_RE = re.compile(
-    r"^\s*(?:câu|cau|question|q)\s*(\d+)\s*[:.)-]?",
-    re.I,
-)
-
-ORDINAL_RE = re.compile(
-    r"^\s*(\d{1,3})\s*[.)]\s+\S",
-    re.I,
-)
-
-OPTION_RE = re.compile(
-    r"^\s*(?:\(([A-H])\)|([A-H])\s*[.):])",
-    re.I,
-)
+from backend.engine.pdf_layout import locate, question_segments
 
 
 @dataclass(frozen=True)
@@ -86,528 +70,17 @@ class RedMarkConfig:
 
     @property
     def fingerprint(self) -> str:
+        payload = {
+            "algorithm_version": 3,
+            **asdict(self),
+        }
+
         return hashlib.sha256(
             json.dumps(
-                asdict(self),
+                payload,
                 sort_keys=True,
             ).encode()
         ).hexdigest()[:16]
-
-
-def _question_number(text: str) -> int | None:
-    match = QUESTION_RE.match(text)
-
-    if match:
-        return int(match.group(1))
-
-    match = ORDINAL_RE.match(text)
-
-    return int(match.group(1)) if match else None
-
-
-def _lines_from_words(
-    words: list[tuple],
-) -> list[dict[str, Any]]:
-    grouped = defaultdict(list)
-
-    for word in words:
-        if len(word) >= 8:
-            grouped[
-                (int(word[5]), int(word[6]))
-            ].append(word)
-
-    lines = []
-
-    for parts in grouped.values():
-        parts.sort(key=lambda item: item[0])
-
-        lines.append({
-            "text": " ".join(
-                str(part[4]) for part in parts
-            ),
-            "bbox": (
-                min(part[0] for part in parts),
-                min(part[1] for part in parts),
-                max(part[2] for part in parts),
-                max(part[3] for part in parts),
-            ),
-        })
-
-    return sorted(
-        lines,
-        key=lambda line: (
-            line["bbox"][1],
-            line["bbox"][0],
-        ),
-    )
-
-
-def _find_column(
-    page: fitz.Page,
-    lines: list[dict[str, Any]],
-    x_center: float,
-) -> tuple[float, float]:
-    width = page.rect.width
-
-    intervals = sorted(
-        (line["bbox"][0], line["bbox"][2])
-        for line in lines
-    )
-
-    candidates = []
-    previous_right = None
-
-    for left, right in intervals:
-        if previous_right is not None:
-            gap = left - previous_right
-            middle = (left + previous_right) / 2
-
-            if (
-                gap >= width * 0.055
-                and width * 0.2 < middle < width * 0.8
-            ):
-                left_count = sum(
-                    1 for a, _ in intervals
-                    if a < middle
-                )
-
-                right_count = sum(
-                    1 for _, b in intervals
-                    if b > middle
-                )
-
-                if left_count >= 4 and right_count >= 4:
-                    candidates.append((gap, middle))
-
-        previous_right = max(
-            previous_right or right,
-            right,
-        )
-
-    if not candidates:
-        return 0.0, width
-
-    _, divider = max(candidates)
-
-    return (
-        (0.0, divider)
-        if x_center < divider
-        else (divider, width)
-    )
-
-
-def _bbox(
-    value: Any,
-) -> tuple[float, float, float, float] | None:
-    try:
-        numbers = [float(item) for item in value]
-    except (TypeError, ValueError):
-        return None
-
-    if len(numbers) == 4:
-        x0, y0, x1, y1 = numbers
-
-    elif len(numbers) >= 8:
-        xs = numbers[0::2]
-        ys = numbers[1::2]
-
-        x0, y0 = min(xs), min(ys)
-        x1, y1 = max(xs), max(ys)
-
-    else:
-        return None
-
-    if (
-        all(
-            math.isfinite(value)
-            for value in (x0, y0, x1, y1)
-        )
-        and x1 > x0
-        and y1 > y0
-    ):
-        return x0, y0, x1, y1
-
-    return None
-
-
-def _ocr_boxes(
-    page_ocr: dict[str, Any] | None,
-    page: fitz.Page,
-) -> list[dict[str, Any]]:
-    if not isinstance(page_ocr, dict):
-        return []
-
-    boxes = []
-
-    def visit(node: Any) -> None:
-        if isinstance(node, dict):
-            texts = node.get("rec_texts")
-
-            rects = (
-                node.get("rec_boxes")
-                or node.get("dt_boxes")
-            )
-
-            if (
-                isinstance(texts, list)
-                and isinstance(rects, list)
-                and len(texts) == len(rects)
-            ):
-                for text, rect in zip(texts, rects):
-                    parsed = _bbox(rect)
-
-                    if parsed and str(text).strip():
-                        boxes.append(
-                            (str(text).strip(), parsed)
-                        )
-
-            for key in (
-                "block_content",
-                "text",
-                "rec_text",
-            ):
-                text = node.get(key)
-
-                rect = (
-                    node.get("block_bbox")
-                    or node.get("bbox")
-                    or node.get("box")
-                )
-
-                parsed = _bbox(rect)
-
-                if (
-                    isinstance(text, str)
-                    and text.strip()
-                    and parsed
-                ):
-                    boxes.append((text.strip(), parsed))
-
-            for key, child in node.items():
-                if key not in (
-                    "rec_texts",
-                    "rec_boxes",
-                    "dt_boxes",
-                ):
-                    visit(child)
-
-        elif isinstance(node, list):
-            for child in node:
-                visit(child)
-
-    pruned = (
-        page_ocr.get("pruned_result")
-        or page_ocr.get("prunedResult")
-    )
-
-    if not isinstance(pruned, dict):
-        raw = page_ocr.get("raw")
-
-        pruned = (
-            raw.get("prunedResult")
-            if isinstance(raw, dict)
-            else None
-        )
-
-    visit(
-        pruned
-        if isinstance(pruned, dict)
-        else page_ocr
-    )
-
-    boxes = list(dict.fromkeys(boxes))
-
-    if not boxes:
-        return []
-
-    max_x = max(box[2] for _, box in boxes)
-    max_y = max(box[3] for _, box in boxes)
-
-    dims = (
-        pruned
-        if isinstance(pruned, dict)
-        else page_ocr
-    )
-
-    try:
-        width = float(dims.get("width", 0))
-        height = float(dims.get("height", 0))
-    except (TypeError, ValueError):
-        width = height = 0
-
-    # Use the actual OCR image dimensions,
-    # not the last occupied bounding box.
-    if (
-        math.isfinite(width)
-        and math.isfinite(height)
-        and width > 0
-        and height > 0
-    ):
-        preprocessor = (
-            dims.get("doc_preprocessor_res")
-            or {}
-        )
-
-        if isinstance(preprocessor, dict):
-            settings = (
-                preprocessor.get("model_settings")
-                or {}
-            )
-
-            if preprocessor.get(
-                "angle", 0
-            ) not in (0, None):
-                return []
-
-            if (
-                isinstance(settings, dict)
-                and settings.get("use_doc_unwarping")
-            ):
-                # No inverse warp is available.
-                # Do not crop using unreliable coordinates.
-                return []
-
-        if (
-            max_x > width * 1.02
-            or max_y > height * 1.02
-        ):
-            return []
-
-        aspect_difference = abs(
-            (width / height)
-            / (page.rect.width / page.rect.height)
-            - 1
-        )
-
-        if aspect_difference > 0.05:
-            return []
-
-        sx = page.rect.width / width
-        sy = page.rect.height / height
-
-    elif max_x <= 1.0 and max_y <= 1.0:
-        sx = page.rect.width
-        sy = page.rect.height
-
-    elif (
-        max_x <= page.rect.width
-        and max_y <= page.rect.height
-    ):
-        # Legacy OCR already in PDF coordinates.
-        sx = sy = 1.0
-
-    else:
-        # Unknown coordinate space.
-        return []
-
-    normalized = [
-        (
-            text,
-            (
-                box[0] * sx,
-                box[1] * sy,
-                box[2] * sx,
-                box[3] * sy,
-            ),
-        )
-        for text, box in boxes
-    ]
-
-    normalized.sort(
-        key=lambda item: (
-            (item[1][1] + item[1][3]) / 2,
-            item[1][0],
-        )
-    )
-
-    lines = []
-
-    for text, rect in normalized:
-        center_y = (rect[1] + rect[3]) / 2
-
-        target = next(
-            (
-                line
-                for line in lines
-                if "\n" not in text
-                and "\n" not in line["text"]
-                and abs(
-                    line["center_y"] - center_y
-                ) <= max(
-                    2.0,
-                    min(
-                        rect[3] - rect[1],
-                        line["bbox"][3]
-                        - line["bbox"][1],
-                    ) * 0.4,
-                )
-            ),
-            None,
-        )
-
-        if target is None:
-            lines.append({
-                "text": text,
-                "bbox": rect,
-                "center_y": center_y,
-            })
-
-        else:
-            target.setdefault(
-                "parts",
-                [
-                    (
-                        target["bbox"][0],
-                        target["text"],
-                    )
-                ],
-            )
-
-            target["parts"].append(
-                (rect[0], text)
-            )
-
-            target["bbox"] = (
-                min(target["bbox"][0], rect[0]),
-                min(target["bbox"][1], rect[1]),
-                max(target["bbox"][2], rect[2]),
-                max(target["bbox"][3], rect[3]),
-            )
-
-    for line in lines:
-        if "parts" in line:
-            line["text"] = " ".join(
-                text
-                for _, text in sorted(line["parts"])
-            )
-
-        line.pop("center_y", None)
-        line.pop("parts", None)
-
-    return sorted(
-        lines,
-        key=lambda line: (
-            line["bbox"][1],
-            line["bbox"][0],
-        ),
-    )
-
-
-def _locate_from_lines(
-    page: fitz.Page,
-    question_number: int,
-    lines: list[dict[str, Any]],
-    source: str,
-) -> dict[str, Any] | None:
-    if not lines:
-        return None
-
-    starts = [
-        (index, _question_number(line["text"]))
-        for index, line in enumerate(lines)
-    ]
-
-    candidates = [
-        index
-        for index, number in starts
-        if number == question_number
-    ]
-
-    if len(candidates) != 1:
-        return None
-
-    target = candidates[0]
-    heading = lines[target]
-    bbox = heading["bbox"]
-
-    x0, x1 = _find_column(
-        page,
-        lines,
-        (bbox[0] + bbox[2]) / 2,
-    )
-
-    next_start = None
-
-    for index, number in starts:
-        if index <= target or number is None:
-            continue
-
-        other = lines[index]["bbox"]
-        center = (other[0] + other[2]) / 2
-
-        if x0 <= center <= x1:
-            next_start = index
-            break
-
-    end_y = (
-        lines[next_start]["bbox"][1]
-        if next_start is not None
-        else page.rect.height
-    )
-
-    options = {}
-
-    for line in lines[target + 1:next_start]:
-        line_box = line["bbox"]
-        center = (line_box[0] + line_box[2]) / 2
-
-        if not (x0 <= center <= x1):
-            continue
-
-        option_match = OPTION_RE.match(line["text"])
-
-        if option_match:
-            label = (
-                option_match.group(1)
-                or option_match.group(2)
-            ).upper()
-
-            options[label] = line_box
-
-    return {
-        "bbox": (
-            x0,
-            max(0.0, bbox[1]),
-            x1,
-            max(bbox[1] + 1, end_y),
-        ),
-        "question_start_y": bbox[1],
-        "next_start_y": (
-            end_y
-            if next_start is not None
-            else None
-        ),
-        "column_x": (x0, x1),
-        "options": options,
-        "source": source,
-    }
-
-
-def _locate(
-    page: fitz.Page,
-    question_number: int,
-    page_ocr: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    pdf_lines = _lines_from_words(
-        page.get_text("words")
-    )
-
-    located = _locate_from_lines(
-        page,
-        question_number,
-        pdf_lines,
-        "pymupdf",
-    )
-
-    if located:
-        return located
-
-    return _locate_from_lines(
-        page,
-        question_number,
-        _ocr_boxes(page_ocr, page),
-        "paddleocr",
-    )
 
 
 def _render_segment(
@@ -622,12 +95,13 @@ def _render_segment(
         or rect.width <= 0
         or rect.height <= 0
     ):
-        raise ValueError(
-            "Invalid PDF crop rectangle"
-        )
+        raise ValueError("Invalid PDF crop rectangle")
 
     pixmap = page.get_pixmap(
-        matrix=fitz.Matrix(dpi / 72, dpi / 72),
+        matrix=fitz.Matrix(
+            dpi / 72,
+            dpi / 72,
+        ),
         clip=rect,
         alpha=False,
         annots=True,
@@ -648,134 +122,12 @@ def _render_segment(
     )
 
 
-def _question_segments(
-    document: fitz.Document,
-    question_number: int,
-    first_page: int,
-    padding: float,
-    page_ocr: list[dict[str, Any]] | None = None,
-):
-    if first_page < 0 or first_page >= len(document):
-        first_page = 0
-
-    page = document[first_page]
-    page_ocr = page_ocr or []
-
-    located = _locate(
-        page,
-        question_number,
-        page_ocr[first_page]
-        if first_page < len(page_ocr)
-        else None,
-    )
-
-    if located is None:
-        return [
-            (
-                first_page,
-                (
-                    0,
-                    0,
-                    page.rect.width,
-                    page.rect.height,
-                ),
-            )
-        ], None
-
-    x0, x1 = located["column_x"]
-
-    start_y = max(
-        0.0,
-        located["question_start_y"] - padding,
-    )
-
-    next_y = located["next_start_y"]
-
-    if next_y is not None:
-        return [
-            (
-                first_page,
-                (
-                    x0,
-                    start_y,
-                    x1,
-                    max(start_y + 1, next_y),
-                ),
-            )
-        ], located
-
-    segments = [
-        (
-            first_page,
-            (
-                x0,
-                start_y,
-                x1,
-                page.rect.height,
-            ),
-        )
-    ]
-
-    for page_index in range(
-        first_page + 1,
-        len(document),
-    ):
-        next_page = document[page_index]
-
-        next_located = _locate(
-            next_page,
-            question_number + 1,
-            page_ocr[page_index]
-            if page_index < len(page_ocr)
-            else None,
-        )
-
-        if next_located:
-            next_x0, next_x1 = _find_column(
-                next_page,
-                _lines_from_words(
-                    next_page.get_text("words")
-                ),
-                (x0 + x1) / 2,
-            )
-
-            stop_y = next_located[
-                "question_start_y"
-            ]
-
-            segments.append((
-                page_index,
-                (
-                    next_x0,
-                    0,
-                    next_x1,
-                    max(1.0, stop_y),
-                ),
-            ))
-
-            break
-
-        segments.append((
-            page_index,
-            (
-                0,
-                0,
-                next_page.rect.width,
-                next_page.rect.height,
-            ),
-        ))
-
-        if len(segments) >= 3:
-            break
-
-    return segments, located
-
-
 def _join_images(
     images: list[np.ndarray],
 ) -> np.ndarray:
     max_width = max(
-        image.shape[1] for image in images
+        image.shape[1]
+        for image in images
     )
 
     normalized = []
@@ -818,12 +170,13 @@ def crop_question_pdf(
     )
 
     with fitz.open(pdf_path) as document:
-        first_page = max(
-            0,
-            (page_number or 1) - 1,
-        )
+        first_page = (
+            page_number
+            if page_number is not None
+            else 1
+        ) - 1
 
-        segments, located = _question_segments(
+        segments, located = question_segments(
             document,
             question_number,
             first_page,
@@ -842,13 +195,20 @@ def crop_question_pdf(
 
         image = _join_images(images)
 
-        if not cv2.imwrite(
-            str(output_path),
+        # Use Python file writing to support Unicode paths on Windows.
+        success, encoded = cv2.imencode(
+            ".png",
             image,
-        ):
+        )
+
+        if not success:
             raise OSError(
-                "Could not write cropped question image"
+                "Could not encode cropped question image"
             )
+
+        output_path.write_bytes(
+            encoded.tobytes()
+        )
 
         coordinates = [
             {
@@ -875,11 +235,11 @@ def crop_question_pdf(
 
 
 def _expanded(
-    box,
+    box: tuple[float, float, float, float],
     margin: float,
     width: int,
     height: int,
-):
+) -> tuple[int, int, int, int]:
     return (
         max(0, int(box[0] - margin)),
         max(0, int(box[1] - margin)),
@@ -889,8 +249,8 @@ def _expanded(
 
 
 def _rect_distance(
-    first,
-    second,
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
 ) -> float:
     dx = max(
         first[0] - second[2],
@@ -914,7 +274,12 @@ def _cached_page_red_data(
     file_size: int,
     page_index: int,
     config: RedMarkConfig,
-):
+) -> tuple[
+    float,
+    float,
+    np.ndarray,
+    list[tuple[int, int, int, int, int]],
+]:
     with fitz.open(pdf_path) as document:
         page = document[page_index]
 
@@ -958,7 +323,11 @@ def _cached_page_red_data(
             config.saturation_min,
             config.value_min,
         ]),
-        np.array([179, 255, 255]),
+        np.array([
+            179,
+            255,
+            255,
+        ]),
     )
 
     red_mask = cv2.bitwise_or(
@@ -994,7 +363,10 @@ def _cached_page_red_data(
     )
 
     components = [
-        tuple(int(value) for value in stats[index])
+        tuple(
+            int(value)
+            for value in stats[index]
+        )
         for index in range(1, count)
         if int(
             stats[index][cv2.CC_STAT_AREA]
@@ -1032,17 +404,18 @@ def detect_red_mark_pdf(
     }
 
     with fitz.open(pdf_path) as document:
-        page_index = max(
-            0,
-            min(
-                (page_number or 1) - 1,
-                len(document) - 1,
-            ),
-        )
+        page_index = (
+            page_number
+            if page_number is not None
+            else 1
+        ) - 1
+
+        if not 0 <= page_index < len(document):
+            return base
 
         page = document[page_index]
 
-        located = _locate(
+        located = locate(
             page,
             question_number,
             page_ocr,
@@ -1062,18 +435,28 @@ def detect_red_mark_pdf(
 
         stat = Path(pdf_path).stat()
 
-        _, _, red_mask, components = (
-            _cached_page_red_data(
-                str(Path(pdf_path).resolve()),
-                stat.st_mtime_ns,
-                stat.st_size,
-                page_index,
-                config,
-            )
+        (
+            page_width,
+            page_height,
+            red_mask,
+            components,
+        ) = _cached_page_red_data(
+            str(Path(pdf_path).resolve()),
+            stat.st_mtime_ns,
+            stat.st_size,
+            page_index,
+            config,
         )
 
         scale = config.dpi / 72
-        candidate_scores = {}
+
+        candidate_scores: dict[
+            str,
+            tuple[
+                float,
+                tuple[int, int, int, int] | None,
+            ],
+        ] = {}
 
         for label, option_box in available.items():
             local_px = tuple(
@@ -1131,10 +514,7 @@ def detect_red_mark_pdf(
 
                 proximity_score = math.exp(
                     -distance_points
-                    / max(
-                        config.max_distance_points,
-                        1,
-                    )
+                    / max(config.max_distance_points, 1)
                 )
 
                 score = (
@@ -1148,8 +528,7 @@ def detect_red_mark_pdf(
 
             density_score = min(
                 1.0,
-                local_count
-                / max(config.min_red_pixels, 1),
+                local_count / max(config.min_red_pixels, 1),
             )
 
             candidate_scores[label] = (
@@ -1166,8 +545,7 @@ def detect_red_mark_pdf(
 
         if (
             not ranked
-            or ranked[0][1][0]
-            < config.medium_confidence
+            or ranked[0][1][0] < config.medium_confidence
         ):
             return base
 
@@ -1189,6 +567,7 @@ def detect_red_mark_pdf(
         if (
             best_score >= config.high_confidence
             and score_margin >= config.min_score_margin
+            and len(available) == len(set(option_labels))
         ):
             status = "detected"
 
@@ -1199,8 +578,10 @@ def detect_red_mark_pdf(
 
         if component_box:
             mark_coordinates = [
-                round(value / scale, 2)
-                for value in component_box
+                round(component_box[0] / scale, 2),
+                round(component_box[1] / scale, 2),
+                round(component_box[2] / scale, 2),
+                round(component_box[3] / scale, 2),
             ]
 
         return {

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import requests
+import pymupdf
 
 from backend.engine.paddle_client import (
     PaddleOCRTimeoutError,
@@ -17,14 +18,15 @@ class SubmitTimeoutTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "vatlli.pdf"
-        self.path.write_bytes(
-            b"%PDF-" + b"a" * 1023424
-        )
+
+        with pymupdf.open() as pdf:
+            pdf.new_page()
+            pdf.save(str(self.path))
 
         self.env = patch.dict(os.environ, {
             "PADDLEOCR_ACCESS_TOKEN": "dummy-test-token",
             "JOB_URL": "https://example.invalid/jobs",
-            "PADDLEOCR_SUBMIT_TIMEOUT": "90",
+            "PADDLEOCR_UPLOAD_SOCKET_TIMEOUT": "90",
             "PADDLEOCR_REQUEST_TIMEOUT": "20",
             "PADDLEOCR_POLL_TIMEOUT": "75",
         })
@@ -52,9 +54,10 @@ class SubmitTimeoutTests(unittest.TestCase):
 
             # Do not create duplicate remote jobs.
             self.assertEqual(post.call_count, 1)
+
             self.assertEqual(
                 post.call_args.kwargs["timeout"],
-                90.0,
+                (90.0, 20.0),
             )
 
     def test_normal_submit_and_result(self):
@@ -105,11 +108,12 @@ class SubmitTimeoutTests(unittest.TestCase):
 
         self.assertEqual(
             post.call_args.kwargs["timeout"],
-            90.0,
+            (90.0, 20.0),
         )
+
         self.assertEqual(
             get.call_args.kwargs["timeout"],
-            20.0,
+            (10.0, 20.0),
         )
 
     def test_other_connection_error(self):
@@ -131,16 +135,20 @@ class SubmitTimeoutTests(unittest.TestCase):
     def test_invalid_timeout_configuration(self):
         with patch.dict(
             os.environ,
-            {"PADDLEOCR_SUBMIT_TIMEOUT": "NaN"},
-        ):
+            {"PADDLEOCR_UPLOAD_SOCKET_TIMEOUT": "NaN"},
+        ), patch(
+            "backend.engine.paddle_client.requests.post"
+        ) as post:
             with self.assertRaisesRegex(
                 ValueError,
-                "PADDLEOCR_SUBMIT_TIMEOUT",
+                "PADDLEOCR_UPLOAD_SOCKET_TIMEOUT",
             ):
                 recognize_pdf(
                     str(self.path),
                     "PaddleOCR-VL-1.6",
                 )
+
+            post.assert_not_called()
 
 
 if __name__ == "__main__":
