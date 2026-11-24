@@ -11,6 +11,7 @@ import {
 } from "./contexts/AppProviders";
 
 import { StatsService } from "./services/stats";
+import { configureLocalApi } from "./services/api";
 
 import { Header } from "./components/layout/Header";
 import { HomePage } from "./pages/HomePage";
@@ -22,6 +23,7 @@ import { ExamPreviewPage } from "./pages/ExamPreviewPage";
 import { ParserPreviewPage } from "./pages/ParserPreviewPage";
 
 StatsService.enableLocalHistory();
+configureLocalApi();
 
 function App() {
   return (
