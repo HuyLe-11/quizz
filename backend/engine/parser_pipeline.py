@@ -13,6 +13,7 @@ from .pdf_fidelity import enhance_ocr_with_pdf_geometry
 from .parser_text_normalizer import normalize_pdf_backed_ocr
 from .parser_choice_fidelity import reconcile_pronunciation_choices
 from .parser_review_flags import clear_verified_correction_warnings
+from .parser_structure_review import review_question_structure
 from .quiz_parser import (
     QUESTION_START,
     NUMBERED_START,
@@ -392,6 +393,10 @@ def parse_pdf_questions(
 
     _review_unresolved_media(questions)
 
+    structure_review = review_question_structure(
+        questions
+    )
+
     if embed_context:
         for question in questions:
             context = [
@@ -427,6 +432,7 @@ def parse_pdf_questions(
             "normalized_repairs": repairs,
             "final_choice_repairs": final_choices,
             "verified_correction_questions": verified,
+            **structure_review,
         },
         "timings": {
             "preprocess_seconds": round(

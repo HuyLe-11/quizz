@@ -27,6 +27,10 @@ from backend.engine.paddle_client import (
     recognize_pdf,
 )
 
+from backend.engine.parser_structure_review import (
+    review_question_structure,
+)
+
 from backend.engine.parser_pipeline import (
     normalize_option_layout,
     parse_pdf_questions,
@@ -61,12 +65,6 @@ ALLOWED_MODELS = {
 SECTION_IN_OPTION = re.compile(
     r"(?:Mark\s+the\s+letter\b|"
     r"Read\s+the\s+following\s+passage\b)",
-    re.I,
-)
-
-EXPECT_FOUR = re.compile(
-    r"\bA\s*,?\s*B\s*,?\s*C\s*,?\s*"
-    r"(?:or|hoặc)?\s*D\b",
     re.I,
 )
 
@@ -277,84 +275,78 @@ def _response(
     parsed: dict,
     ocr_seconds: float | None,
 ) -> dict:
-    incomplete = []
-    contaminated = []
-    review = []
+    diagnostics = dict(
+        parsed["diagnostics"]
+    )
 
-    for question in parsed["questions"]:
-        number = question["question_id"]
-
-        choices = question.get(
-            "mcp_options",
-            [],
-        )
-
-        labels = [
-            choice.get("label")
-            for choice in choices
-        ]
-
-        expected = [
-            chr(ord("A") + index)
-            for index in range(len(labels))
-        ]
-
-        four = bool(
-            EXPECT_FOUR.search(
-                question.get(
-                    "section_instruction",
-                    "",
-                )
+    # Text-only /reparse bypasses PDF-based recovery.
+    if "review_items" not in diagnostics:
+        diagnostics.update(
+            review_question_structure(
+                parsed["questions"]
             )
         )
 
-        if (
-            question["type"] == "mcp"
-            and (
-                len(labels) < 2
-                or labels != expected
-                or (four and len(labels) != 4)
-                or any(
-                    not _block_text(choice["content"])
-                    for choice in choices
-                )
-            )
-        ):
-            incomplete.append(number)
+    items = diagnostics["review_items"]
 
+    incomplete = [
+        item["question_number"]
+        for item in items
+        if any(
+            code != "existing_review_flag"
+            for code in item["issue_codes"]
+        )
+    ]
+
+    review = [
+        item["question_number"]
+        for item in items
+    ]
+
+    contaminated = [
+        question["question_id"]
+        for question in parsed["questions"]
         if any(
             SECTION_IN_OPTION.search(
                 _block_text(choice["content"])
             )
-            for choice in choices
-        ):
-            contaminated.append(number)
-
-        if question.get("parse_fallback"):
-            review.append(number)
+            for choice in question.get(
+                "mcp_options",
+                [],
+            )
+        )
+    ]
 
     return {
         "filename": filename,
         "model": model,
+
         "page_count": len(
             parsed["page_texts"]
         ),
+
         "page_texts": parsed["page_texts"],
+
         "raw_page_texts": parsed[
             "raw_page_texts"
         ],
+
         "question_count": len(
             parsed["questions"]
         ),
+
         "questions": parsed["questions"],
+
         "diagnostics": {
-            **parsed["diagnostics"],
+            **diagnostics,
             "incomplete_options": incomplete,
             "contaminated_options": contaminated,
             "needs_review": review,
         },
+
         "timings": {
             **parsed["timings"],
+
             "ocr_seconds": (
                 round(ocr_seconds, 2)
                 if ocr_seconds is not None
