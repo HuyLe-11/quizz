@@ -24,7 +24,13 @@ interface QuestionContentProps {
 }
 
 const INSTRUCTION_START =
-    /^(?:\*\*|__)?\s*(?:Mark\s+the\s+letter\b|Read\s+the\s+(?:following\s+)?(?:passage|text)\b|Choose\s+the\s+(?:best|correct)\b|Select\s+the\s+(?:best|correct)\b|Identify\s+the\b|Chọn\s+(?:đáp\s+án|câu|phương\s+án)\b|Đọc\s+(?:đoạn|bài)\b)/i;
+    /^(?:\*\*|__)?\s*(?:Mark\s+the\s+letter\b|Read\s+the\s+(?:following\s+)?(?:passage|text)\b|Choose\s+the\s+(?:best|correct)\b|Select\s+the\s+(?:best|correct)\b|Identify\s+the\b|Chọn\s+(?:đáp\s+án|câu|phương\s+án)|Đọc\s+(?:đoạn|bài)|Phần\s+(?:[IVXLCDM]+|\d+)\s*[.:-]|Câu\s+trắc\s+nghiệm|Thí\s+sinh\s+(?:trả\s+lời|chọn|làm)|Trong\s+mỗi\s+ý)/iu;
+
+const VI_SECTION =
+    /^(?:\*\*|__)?\s*(?:Phần\s+(?:[IVXLCDM]+|\d+)\s*[.:-]|Câu\s+trắc\s+nghiệm|Thí\s+sinh\s+(?:trả\s+lời|chọn|làm)|Trong\s+mỗi\s+ý)/iu;
+
+const VI_CONTINUATION =
+    /^(?:Thí\s+sinh|Mỗi\s+câu(?:\s+hỏi)?|Trong\s+mỗi\s+ý|Ở\s+mỗi\s+câu|Đối\s+với\s+mỗi\s+câu)\s/iu;
 
 const MARKDOWN_HEADING =
     /^\s*#{1,6}[ \t]+/;
@@ -32,17 +38,22 @@ const MARKDOWN_HEADING =
 const INSTRUCTION_END =
     /(?:\b(?:following\s+(?:questions|exchanges|sentences|items)|(?:numbered\s+)?blanks|questions|items)\s+(?:from\s+)?\d+\s*(?:to|[-–—])\s*\d+|\bfollowing\s+(?:questions|exchanges|sentences|items)|\bquestions\s+below|\b(?:correct|best)\s+answer)\s*[.:]?\s*$/i;
 
+const VI_INSTRUCTION_END =
+    /(?:một\s+(?:phương\s+án|đáp\s+án)(?:\s+đúng)?(?:\s+duy\s+nhất)?|chọn\s+đúng\s+hoặc\s+sai|trả\s+lời\s+ngắn|trả\s+lời\s+từ\s+câu\s+\d+\s+đến\s+câu\s+\d+)\s*[.:]?\s*$/iu;
+
 const QUESTION_START =
     /^(?:Question|Câu)\s+\d+\b/i;
+
+const SPEAKER_MARKER =
+    String.raw`[-–—][ \t]+[\p{Lu}][\p{L}\p{M}.'’]*(?:[ \t]+[\p{Lu}][\p{L}\p{M}.'’]*){0,3}[ \t]*:`;
 
 /**
  * Normalize leading section instructions for display.
  *
- * - Remove Markdown heading markers from recognized instructions.
- * - Support instructions without trailing punctuation.
- * - Support wrapped instructions and question-number ranges.
- * - Insert one blank line before question or passage content.
- * - Preserve existing paragraph breaks and stored question data.
+ * Support both English and Vietnamese exam instructions,
+ * including Markdown headings and wrapped instructions.
+ *
+ * Preserve existing paragraph breaks and stored question data.
  */
 function separateInstruction(content: string): string {
     const lines = content
@@ -66,12 +77,15 @@ function separateInstruction(content: string): string {
         "",
     );
 
-    // Do not interpret ordinary Markdown or source code
-    // as an exam instruction.
     if (!INSTRUCTION_START.test(heading)) {
         return content;
     }
 
+    const vietnameseSection =
+        VI_SECTION.test(heading);
+
+    // Remove Markdown heading markers only from
+    // recognized exam instructions.
     if (marked) {
         lines[start] = heading.replace(
             /[ \t]+#{1,6}[ \t]*$/,
@@ -85,6 +99,8 @@ function separateInstruction(content: string): string {
     );
 
     let boundary = -1;
+
+    let continuationFound = false;
 
     for (let i = start; i < limit; i++) {
         const line = lines[i].trim();
@@ -103,8 +119,6 @@ function separateInstruction(content: string): string {
             break;
         }
 
-        // Join instruction lines only for boundary detection.
-        // Do not modify their original layout.
         const ending = lines
             .slice(start, i + 1)
             .join(" ")
@@ -113,8 +127,32 @@ function separateInstruction(content: string): string {
 
         const nextLine = lines[i + 1].trim();
 
+        // Preserve existing paragraph breaks and
+        // avoid scanning into source code.
+        if (
+            !nextLine
+            || nextLine.startsWith("```")
+        ) {
+            break;
+        }
+
+        // Vietnamese exam instructions often consist
+        // of multiple consecutive sentences.
+        // Do not split before a continuation sentence.
+        if (
+            vietnameseSection
+            && VI_CONTINUATION.test(nextLine)
+        ) {
+            continuationFound = true;
+            continue;
+        }
+
         const hasKnownEnding =
             INSTRUCTION_END.test(ending);
+
+        const hasVietnameseEnding =
+            vietnameseSection
+            && VI_INSTRUCTION_END.test(ending);
 
         const hasPunctuation =
             i === start
@@ -125,6 +163,7 @@ function separateInstruction(content: string): string {
 
         if (
             hasKnownEnding
+            || hasVietnameseEnding
             || hasPunctuation
             || nextIsQuestion
         ) {
@@ -132,26 +171,24 @@ function separateInstruction(content: string): string {
             break;
         }
 
-        // Do not scan across existing paragraphs
-        // or unrelated complete sentences.
-        if (
-            !nextLine
-            || /[.!?:]$/.test(ending)
-        ) {
+        // Do not scan across unrelated sentences.
+        if (/[.!?:]$/.test(ending)) {
             break;
         }
     }
 
-    // A recognized Markdown heading is normally one line.
-    // Prefer a known wrapped boundary when available.
+    // A recognized Markdown heading normally occupies
+    // one logical line. Avoid this fallback when a
+    // multi-line Vietnamese instruction was detected.
     if (
         boundary === -1
         && marked
+        && !continuationFound
     ) {
         boundary = start;
     }
 
-    // Insert a single blank line only when necessary.
+    // Add exactly one blank line when necessary.
     if (
         boundary !== -1
         && lines[boundary + 1]?.trim()
@@ -164,6 +201,65 @@ function separateInstruction(content: string): string {
     }
 
     return lines.join("\n");
+}
+
+/**
+ * Restore line breaks before clearly identified dialogue turns.
+ *
+ * Require multiple speaker markers together with a dialogue
+ * instruction or quoted speech to avoid modifying ordinary
+ * lists, formulas, and negative numbers.
+ */
+function separateDialogue(content: string): string {
+    if (/```|\$|!\[|`/.test(content)) {
+        return content;
+    }
+
+    const firstParagraph = content
+        .trimStart()
+        .split(/\n[ \t]*\n/, 1)[0];
+
+    const instruction =
+        INSTRUCTION_START.test(firstParagraph)
+        && /\b(?:exchanges|dialogues?|conversations?)\b/i.test(
+            firstParagraph,
+        );
+
+    const markers = [
+        ...content.matchAll(
+            new RegExp(
+                String.raw`(?:^|\s)${SPEAKER_MARKER}`,
+                "gu",
+            ),
+        ),
+    ];
+
+    const quoted = [
+        ...content.matchAll(
+            new RegExp(
+                String.raw`(?:^|\s)${SPEAKER_MARKER}[ \t]*["“‘']`,
+                "gu",
+            ),
+        ),
+    ];
+
+    if (
+        markers.length < 2
+        || (
+            !instruction
+            && quoted.length < 2
+        )
+    ) {
+        return content;
+    }
+
+    return content.replace(
+        new RegExp(
+            String.raw`(\S)[ \t]+(?=${SPEAKER_MARKER})`,
+            "gu",
+        ),
+        "$1\n",
+    );
 }
 
 /**
@@ -235,9 +331,7 @@ function parseInline(
         /\$\$([\s\S]*?)\$\$|\$([^\n$]+?)\$|!\[(.*?)\]\((.*?)\)/g;
 
     let previous = 0;
-
     let match: RegExpExecArray | null;
-
     let index = 0;
 
     while (
@@ -309,7 +403,6 @@ function parseInline(
         }
 
         previous = tokens.lastIndex;
-
         index++;
     }
 
@@ -338,9 +431,7 @@ function parseContent(
         /```(\w*)\n([\s\S]*?)```/g;
 
     let previous = 0;
-
     let match: RegExpExecArray | null;
-
     let index = 0;
 
     while (
@@ -397,7 +488,6 @@ function parseContent(
         );
 
         previous = codeBlocks.lastIndex;
-
         index++;
     }
 
@@ -419,7 +509,9 @@ export function QuestionContent({
                                 }: QuestionContentProps) {
     const renderedContent = useMemo(
         () => parseContent(
-            separateInstruction(content),
+            separateDialogue(
+                separateInstruction(content),
+            ),
         ),
         [content],
     );
