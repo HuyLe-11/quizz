@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
+
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -14,7 +16,17 @@ import cv2
 import fitz
 import numpy as np
 
-from backend.engine.pdf_layout import locate, question_segments
+from backend.engine.pdf_layout import (
+    locate,
+    question_segments,
+)
+
+from backend.engine.pdf_render_policy import (
+    plan_crop_render,
+)
+
+
+logger = logging.getLogger("quizpdf")
 
 
 @dataclass(frozen=True)
@@ -36,35 +48,80 @@ class RedMarkConfig:
     @classmethod
     def from_environment(cls) -> "RedMarkConfig":
         return cls(
-            dpi=int(os.getenv("PDF_RENDER_DPI", "200")),
-            hue_low_max=int(os.getenv("RED_HUE_LOW_MAX", "10")),
-            hue_high_min=int(os.getenv("RED_HUE_HIGH_MIN", "170")),
-            saturation_min=int(os.getenv("RED_SATURATION_MIN", "75")),
-            value_min=int(os.getenv("RED_VALUE_MIN", "45")),
+            dpi=int(
+                os.getenv("PDF_RENDER_DPI", "200")
+            ),
+
+            hue_low_max=int(
+                os.getenv("RED_HUE_LOW_MAX", "10")
+            ),
+
+            hue_high_min=int(
+                os.getenv("RED_HUE_HIGH_MIN", "170")
+            ),
+
+            saturation_min=int(
+                os.getenv("RED_SATURATION_MIN", "75")
+            ),
+
+            value_min=int(
+                os.getenv("RED_VALUE_MIN", "45")
+            ),
+
             morphology_kernel=max(
                 1,
-                int(os.getenv("RED_MORPHOLOGY_KERNEL", "3")),
+                int(
+                    os.getenv(
+                        "RED_MORPHOLOGY_KERNEL",
+                        "3",
+                    )
+                ),
             ),
+
             min_component_pixels=int(
-                os.getenv("RED_MIN_COMPONENT_PIXELS", "8")
+                os.getenv(
+                    "RED_MIN_COMPONENT_PIXELS",
+                    "8",
+                )
             ),
+
             min_red_pixels=int(
                 os.getenv("RED_MIN_PIXELS", "24")
             ),
+
             max_distance_points=float(
-                os.getenv("RED_MAX_DISTANCE_POINTS", "32")
+                os.getenv(
+                    "RED_MAX_DISTANCE_POINTS",
+                    "32",
+                )
             ),
+
             crop_padding_points=float(
-                os.getenv("PDF_CROP_PADDING_POINTS", "14")
+                os.getenv(
+                    "PDF_CROP_PADDING_POINTS",
+                    "14",
+                )
             ),
+
             high_confidence=float(
-                os.getenv("RED_HIGH_CONFIDENCE", "0.76")
+                os.getenv(
+                    "RED_HIGH_CONFIDENCE",
+                    "0.76",
+                )
             ),
+
             medium_confidence=float(
-                os.getenv("RED_MEDIUM_CONFIDENCE", "0.42")
+                os.getenv(
+                    "RED_MEDIUM_CONFIDENCE",
+                    "0.42",
+                )
             ),
+
             min_score_margin=float(
-                os.getenv("RED_MIN_SCORE_MARGIN", "0.14")
+                os.getenv(
+                    "RED_MIN_SCORE_MARGIN",
+                    "0.14",
+                )
             ),
         )
 
@@ -88,6 +145,7 @@ def _render_segment(
     clip: tuple[float, float, float, float],
     dpi: int,
 ) -> np.ndarray:
+
     rect = fitz.Rect(*clip) & page.rect
 
     if (
@@ -95,7 +153,9 @@ def _render_segment(
         or rect.width <= 0
         or rect.height <= 0
     ):
-        raise ValueError("Invalid PDF crop rectangle")
+        raise ValueError(
+            "Invalid PDF crop rectangle"
+        )
 
     pixmap = page.get_pixmap(
         matrix=fitz.Matrix(
@@ -125,6 +185,7 @@ def _render_segment(
 def _join_images(
     images: list[np.ndarray],
 ) -> np.ndarray:
+
     max_width = max(
         image.shape[1]
         for image in images
@@ -134,6 +195,7 @@ def _join_images(
 
     for image in images:
         if image.shape[1] < max_width:
+
             image = cv2.copyMakeBorder(
                 image,
                 0,
@@ -157,6 +219,7 @@ def crop_question_pdf(
     ocr_pages: list[dict[str, Any]] | None = None,
     config: RedMarkConfig | None = None,
 ) -> dict[str, Any]:
+
     config = (
         config
         or RedMarkConfig.from_environment()
@@ -170,6 +233,7 @@ def crop_question_pdf(
     )
 
     with fitz.open(pdf_path) as document:
+
         first_page = (
             page_number
             if page_number is not None
@@ -184,18 +248,40 @@ def crop_question_pdf(
             ocr_pages,
         )
 
+        # Select one common DPI for all segments.
+        # This changes rasterization only, not PDF coordinates.
+        plan = plan_crop_render(
+            document,
+            segments,
+            config.dpi,
+        )
+
+        logger.info(
+            "pdf=crop_render question=%d "
+            "mode=%s requested_dpi=%d "
+            "actual_dpi=%d size=%dx%d pixels=%d",
+            question_number,
+            plan.mode,
+            config.dpi,
+            plan.dpi,
+            plan.width,
+            plan.height,
+            plan.pixels,
+        )
+
         images = [
             _render_segment(
                 document[index],
                 clip,
-                config.dpi,
+                plan.dpi,
             )
             for index, clip in segments
         ]
 
         image = _join_images(images)
 
-        # Use Python file writing to support Unicode paths on Windows.
+        # Use Python file writing to support
+        # Unicode paths on Windows.
         success, encoded = cv2.imencode(
             ".png",
             image,
@@ -213,19 +299,25 @@ def crop_question_pdf(
         coordinates = [
             {
                 "page_number": index + 1,
+
                 "bbox": [
                     round(value, 2)
                     for value in clip
                 ],
             }
+
             for index, clip in segments
         ]
 
         return {
             "image_path": str(output_path),
+
             "page_number": first_page + 1,
+
             "crop_coordinates": coordinates,
+
             "crop_status": "success",
+
             "source": (
                 located["source"]
                 if located
@@ -240,6 +332,7 @@ def _expanded(
     width: int,
     height: int,
 ) -> tuple[int, int, int, int]:
+
     return (
         max(0, int(box[0] - margin)),
         max(0, int(box[1] - margin)),
@@ -252,6 +345,7 @@ def _rect_distance(
     first: tuple[float, float, float, float],
     second: tuple[float, float, float, float],
 ) -> float:
+
     dx = max(
         first[0] - second[2],
         second[0] - first[2],
@@ -280,12 +374,18 @@ def _cached_page_red_data(
     np.ndarray,
     list[tuple[int, int, int, int, int]],
 ]:
+
     with fitz.open(pdf_path) as document:
+
         page = document[page_index]
 
         page_width = page.rect.width
+
         page_height = page.rect.height
 
+        # Keep the existing red-mark detector DPI.
+        # Its pixel thresholds and coordinate transforms
+        # depend on this resolution.
         image = _render_segment(
             page,
             (
@@ -304,11 +404,13 @@ def _cached_page_red_data(
 
     lower = cv2.inRange(
         hsv,
+
         np.array([
             0,
             config.saturation_min,
             config.value_min,
         ]),
+
         np.array([
             config.hue_low_max,
             255,
@@ -318,11 +420,13 @@ def _cached_page_red_data(
 
     upper = cv2.inRange(
         hsv,
+
         np.array([
             config.hue_high_min,
             config.saturation_min,
             config.value_min,
         ]),
+
         np.array([
             179,
             255,
@@ -367,7 +471,9 @@ def _cached_page_red_data(
             int(value)
             for value in stats[index]
         )
+
         for index in range(1, count)
+
         if int(
             stats[index][cv2.CC_STAT_AREA]
         ) >= config.min_component_pixels
@@ -389,6 +495,7 @@ def detect_red_mark_pdf(
     page_ocr: dict[str, Any] | None = None,
     config: RedMarkConfig | None = None,
 ) -> dict[str, Any]:
+
     config = (
         config
         or RedMarkConfig.from_environment()
@@ -396,14 +503,20 @@ def detect_red_mark_pdf(
 
     base = {
         "detected_answer": None,
+
         "confidence": 0.0,
+
         "status": "not_found",
+
         "page_number": page_number or 1,
+
         "mark_coordinates": None,
+
         "config_fingerprint": config.fingerprint,
     }
 
     with fitz.open(pdf_path) as document:
+
         page_index = (
             page_number
             if page_number is not None
@@ -426,7 +539,9 @@ def detect_red_mark_pdf(
 
         available = {
             label: located["options"][label]
+
             for label in option_labels
+
             if label in located["options"]
         }
 
@@ -459,6 +574,7 @@ def detect_red_mark_pdf(
         ] = {}
 
         for label, option_box in available.items():
+
             local_px = tuple(
                 value * scale
                 for value in option_box
@@ -476,17 +592,30 @@ def detect_red_mark_pdf(
             local_count = (
                 int(
                     np.count_nonzero(
-                        red_mask[ry0:ry1, rx0:rx1]
+                        red_mask[
+                            ry0:ry1,
+                            rx0:rx1,
+                        ]
                     )
                 )
+
                 if rx1 > rx0 and ry1 > ry0
+
                 else 0
             )
 
             best_component_score = 0.0
+
             best_component_box = None
 
-            for x, y, width, height, area in components:
+            for (
+                x,
+                y,
+                width,
+                height,
+                area,
+            ) in components:
+
                 component_box = (
                     x,
                     y,
@@ -514,7 +643,10 @@ def detect_red_mark_pdf(
 
                 proximity_score = math.exp(
                     -distance_points
-                    / max(config.max_distance_points, 1)
+                    / max(
+                        config.max_distance_points,
+                        1,
+                    )
                 )
 
                 score = (
@@ -523,12 +655,17 @@ def detect_red_mark_pdf(
                 )
 
                 if score > best_component_score:
+
                     best_component_score = score
+
                     best_component_box = component_box
 
             density_score = min(
                 1.0,
-                local_count / max(config.min_red_pixels, 1),
+                local_count / max(
+                    config.min_red_pixels,
+                    1,
+                ),
             )
 
             candidate_scores[label] = (
@@ -539,13 +676,17 @@ def detect_red_mark_pdf(
 
         ranked = sorted(
             candidate_scores.items(),
+
             key=lambda item: item[1][0],
+
             reverse=True,
         )
 
         if (
             not ranked
-            or ranked[0][1][0] < config.medium_confidence
+
+            or ranked[0][1][0]
+            < config.medium_confidence
         ):
             return base
 
@@ -556,7 +697,9 @@ def detect_red_mark_pdf(
 
         second_score = (
             ranked[1][1][0]
+
             if len(ranked) > 1
+
             else 0.0
         )
 
@@ -566,8 +709,12 @@ def detect_red_mark_pdf(
 
         if (
             best_score >= config.high_confidence
+
             and score_margin >= config.min_score_margin
-            and len(available) == len(set(option_labels))
+
+            and len(available) == len(
+                set(option_labels)
+            )
         ):
             status = "detected"
 
@@ -586,12 +733,17 @@ def detect_red_mark_pdf(
 
         return {
             "detected_answer": best_label,
+
             "confidence": round(
                 min(1.0, best_score),
                 3,
             ),
+
             "status": status,
+
             "page_number": page_index + 1,
+
             "mark_coordinates": mark_coordinates,
+
             "config_fingerprint": config.fingerprint,
         }
