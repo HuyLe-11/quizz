@@ -14,6 +14,7 @@ from .parser_text_normalizer import normalize_pdf_backed_ocr
 from .parser_choice_fidelity import reconcile_pronunciation_choices
 from .parser_review_flags import clear_verified_correction_warnings
 from .parser_structure_review import review_question_structure
+from .scan_pronunciation_review import review_scan_pronunciation
 from .quiz_parser import (
     QUESTION_START,
     NUMBERED_START,
@@ -392,6 +393,11 @@ def parse_pdf_questions(
     )
 
     _review_unresolved_media(questions)
+
+    review_scan_pronunciation(
+        pdf_contents,
+        questions,
+    )
 
     structure_review = review_question_structure(
         questions
