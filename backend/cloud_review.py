@@ -4,6 +4,7 @@ Question ownership is enforced by PostgreSQL RLS.
 All Supabase requests use the authenticated user's JWT.
 """
 
+import hashlib
 import logging
 import tempfile
 
@@ -21,6 +22,12 @@ from backend.engine.pdf_tools import (
     RedMarkConfig,
     crop_question_pdf,
     detect_red_mark_pdf,
+)
+
+from backend.engine.registered_review_evidence import (
+    registered_evidence,
+    review_fingerprint,
+    merge_registered_evidence,
 )
 
 logger = logging.getLogger("quizpdf")
@@ -366,6 +373,8 @@ class CloudReviewService:
             )
 
         config = RedMarkConfig.from_environment()
+        evidence = registered_evidence(exam, question, labels)
+        fingerprint = review_fingerprint(config.fingerprint, evidence)
 
         cached = (
             question.get("red_mark_detection")
@@ -376,7 +385,7 @@ class CloudReviewService:
             not force
             and cached
             and cached.get("config_fingerprint")
-                == config.fingerprint
+                == fingerprint
         ):
             return {
                 **cached,
@@ -384,6 +393,8 @@ class CloudReviewService:
             }
 
         pdf_contents = self._download_pdf(exam)
+        if evidence is not None and hashlib.sha256(pdf_contents).hexdigest() != evidence["source_sha256"]:
+            raise CloudReviewError(409, "PDF gốc không khớp dữ liệu nhận diện.")
 
         pages = self._ocr_pages(exam)
 
@@ -430,42 +441,46 @@ class CloudReviewService:
                     "Không thể nhận diện dấu đỏ.",
                 ) from exc
 
+        detection = merge_registered_evidence(detection, evidence, fingerprint)
         record = {
-            **detection,
-            "question_id": question_id,
-            "user_confirmed_answer": cached.get(
-                "user_confirmed_answer"
-            ),
-            "updated_at": (
-                datetime.now(timezone.utc).isoformat()
-            ),
+            key: detection[key]
+            for key in (
+                "detected_answer", "confidence", "status", "page_number",
+                "mark_coordinates", "config_fingerprint",
+            )
         }
+        record["updated_at"] = datetime.now(timezone.utc).isoformat()
+        path = "/rest/v1/red_mark_detections"
 
-        result = self.repository._request(
-            "POST",
-            "/rest/v1/red_mark_detections",
-            params={
-                "on_conflict": "question_id",
-            },
-            json_data=record,
-            extra_headers={
-                "Prefer": (
-                    "resolution=merge-duplicates,"
-                    "return=representation"
-                ),
-            },
-        )
+        # Insert only if absent. Never send user_confirmed_answer in a
+        # detection write, including when another request creates the row.
+        result = []
+        if not cached:
+            result = self.repository._request(
+                "POST",
+                path,
+                params={"on_conflict": "question_id"},
+                json_data={**record, "question_id": question_id},
+                extra_headers={"Prefer": "resolution=ignore-duplicates,return=representation"},
+            )
 
-        saved = (
-            result[0]
-            if isinstance(result, list) and result
-            else record
-        )
+        if result == []:
+            result = self.repository._request(
+                "PATCH",
+                path,
+                params={"question_id": f"eq.{question_id}"},
+                json_data=record,
+                extra_headers={"Prefer": "return=representation"},
+            )
 
-        return {
-            **saved,
-            "cached": False,
-        }
+        if (
+            not isinstance(result, list) or len(result) != 1
+            or not isinstance(result[0], dict)
+            or result[0].get("question_id") != question_id
+        ):
+            raise CloudReviewError(409, "Không thể lưu kết quả nhận diện.")
+
+        return {**result[0], "cached": False}
 
     def confirm_red_answer(
         self,
