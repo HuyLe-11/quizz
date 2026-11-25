@@ -59,6 +59,8 @@ def _check_response(
     stage: str,
 ) -> None:
     if not response.ok:
+        from .paddle_error_diagnostics import log_http_error
+        log_http_error(response, stage)
         raise PaddleOCRAPIError(
             stage,
             response.status_code,
