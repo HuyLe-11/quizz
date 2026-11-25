@@ -178,7 +178,7 @@ class CheckpointFileTests(unittest.TestCase):
         "backend.cloud_pipeline._needs_crop_fallback",
         return_value=False,
     )
-    @patch("backend.cloud_pipeline.parse_questions_by_pages")
+    @patch("backend.cloud_pipeline._parse_upload_questions")
     @patch("backend.cloud_pipeline.recognize_pdf")
     def test_retry_same_pdf_skips_ocr(
         self,
@@ -263,7 +263,7 @@ class CheckpointFileTests(unittest.TestCase):
         "backend.cloud_pipeline._needs_crop_fallback",
         return_value=False,
     )
-    @patch("backend.cloud_pipeline.parse_questions_by_pages")
+    @patch("backend.cloud_pipeline._parse_upload_questions")
     @patch("backend.cloud_pipeline.recognize_pdf")
     def test_already_committed_exam_is_not_uploaded_again(
         self,

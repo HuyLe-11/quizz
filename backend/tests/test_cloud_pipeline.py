@@ -82,7 +82,7 @@ class CloudPipelineTests(unittest.TestCase):
         return_value=False,
     )
     @patch(
-        "backend.cloud_pipeline.parse_questions_by_pages"
+        "backend.cloud_pipeline._parse_upload_questions"
     )
     @patch(
         "backend.cloud_pipeline.recognize_pdf"
@@ -190,7 +190,7 @@ class CloudPipelineTests(unittest.TestCase):
         return_value=False,
     )
     @patch(
-        "backend.cloud_pipeline.parse_questions_by_pages"
+        "backend.cloud_pipeline._parse_upload_questions"
     )
     @patch(
         "backend.cloud_pipeline.recognize_pdf"
@@ -273,7 +273,7 @@ class CloudPipelineTests(unittest.TestCase):
         return_value=True,
     )
     @patch(
-        "backend.cloud_pipeline.parse_questions_by_pages"
+        "backend.cloud_pipeline._parse_upload_questions"
     )
     @patch(
         "backend.cloud_pipeline.recognize_pdf"

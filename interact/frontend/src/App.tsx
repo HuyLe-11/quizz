@@ -24,6 +24,35 @@ import { AttemptReview } from "./pages/AttemptReview";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExamPreviewPage } from "./pages/ExamPreviewPage";
 
+
+import { configureAuthenticatedApi } from "./services/api";
+import { requireSupabase } from "./services/supabase";
+import { ParserPreviewPage } from "./pages/ParserPreviewPage";
+
+configureAuthenticatedApi(async () => {
+    const {
+        data: { session },
+        error,
+    } = await requireSupabase().auth.getSession();
+
+    if (error) {
+        throw new Error(
+            "Could not get authentication session.",
+            { cause: error },
+        );
+    }
+
+    if (!session?.access_token) {
+        throw new Error("Authentication required.");
+    }
+
+    return `Bearer ${session.access_token}`;
+});
+
+const parserPreviewEnabled =
+    import.meta.env.DEV &&
+    import.meta.env.VITE_PARSER_PREVIEW === "1";
+
 function ApplicationRoutes() {
     const { user, loading } = useAuth();
     const location = useLocation();
@@ -85,6 +114,13 @@ function ApplicationRoutes() {
                             path="/quiz/:examId"
                             element={<QuizPage />}
                         />
+
+                        {parserPreviewEnabled && (
+                            <Route
+                                path="/parser-preview"
+                                element={<ParserPreviewPage />}
+                            />
+                        )}
 
                         <Route
                             path="/stats"

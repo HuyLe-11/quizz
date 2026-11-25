@@ -71,7 +71,7 @@ class RedMarkConfig:
     @property
     def fingerprint(self) -> str:
         payload = {
-            "algorithm_version": 2,
+            "algorithm_version": 3,
             **asdict(self),
         }
 

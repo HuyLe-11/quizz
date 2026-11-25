@@ -107,6 +107,7 @@ export type UploadJobPhase =
     | "source_pdf_save"
     | "question_crops"
     | "sqlite_save"
+    | "cloud_save"
     | "completed";
 
 export interface UploadJob {

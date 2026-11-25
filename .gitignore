@@ -1,4 +1,4 @@
-# Python generated files
+﻿# Python generated files
 __pycache__/
 *.pyc
 *.pyo
@@ -29,13 +29,21 @@ dist/
 *.tsbuildinfo
 
 # SQLite runtime
-/backend/data/quiz.sqlite3
-/backend/data/quiz.sqlite3-wal
-/backend/data/quiz.sqlite3-shm
-/backend/data/quiz.sqlite3-journal
+/backend/data/*.sqlite3
+/backend/data/*.sqlite3-*
+/backend/data/*.db
+/backend/data/generated_exams.json
 
 # Uploaded PDFs and generated images
 /backend/data/storage/
+
+# Parser preview outputs
+*.parser-preview.json
+parser-preview.json
+
+# Local source snapshots
+/feat-parser-core-source.zip
+/feat-supabase-auth-source.zip
 
 # Logs
 *.log

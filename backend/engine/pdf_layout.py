@@ -186,6 +186,21 @@ def ocr_lines(
         page_ocr,
     ]
 
+    # An OCR preprocessor may rotate or nonlinearly warp the source.
+    # Without its inverse transform, OCR boxes cannot safely locate PDF content.
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        preprocessor = source.get("doc_preprocessor_res")
+        if not isinstance(preprocessor, dict):
+            continue
+        settings = preprocessor.get("model_settings")
+        if isinstance(settings, dict) and settings.get("use_doc_unwarping"):
+            return []
+        angle = preprocessor.get("angle")
+        if angle not in (None, 0, -1, "0", "-1"):
+            return []
+
     for source in sources:
         if not isinstance(source, dict):
             continue
@@ -257,6 +272,14 @@ def ocr_lines(
         )
 
         if width and height:
+            if abs((width / height) / (page.rect.width / page.rect.height) - 1) > 0.05:
+                continue
+            if any(
+                rect[0] < 0 or rect[1] < 0
+                or rect[2] > width * 1.02 or rect[3] > height * 1.02
+                for _, rect in items
+            ):
+                continue
             sx = page.rect.width / width
             sy = page.rect.height / height
         elif all(
@@ -565,7 +588,9 @@ def question_segments(
                     x1,
                     max(
                         start + 1,
-                        end - padding / 2,
+                        end - padding / 2
+                        if located["source"] == "paddleocr_inferred"
+                        else end,
                     ),
                 ),
             )

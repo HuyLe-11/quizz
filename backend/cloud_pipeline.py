@@ -21,16 +21,14 @@ try:
         recognize_pdf_smart as recognize_pdf,
     )
     from backend.engine.pdf_tools import crop_question_pdf
-    from backend.engine.quiz_parser import (
-        parse_questions,
-        parse_questions_by_pages,
-    )
     from backend.network.main import (
         ALLOWED_MODELS,
+        PARSER_PIPELINE_VERSION,
         MAX_PDF_BYTES,
         PDF_LOCK,
         _assign_unique_question_ids,
         _needs_crop_fallback,
+        _parse_upload_questions,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "backend":
@@ -43,16 +41,14 @@ except ModuleNotFoundError as exc:
         recognize_pdf_smart as recognize_pdf,
     )
     from engine.pdf_tools import crop_question_pdf
-    from engine.quiz_parser import (
-        parse_questions,
-        parse_questions_by_pages,
-    )
     from network.main import (
         ALLOWED_MODELS,
+        PARSER_PIPELINE_VERSION,
         MAX_PDF_BYTES,
         PDF_LOCK,
         _assign_unique_question_ids,
         _needs_crop_fallback,
+        _parse_upload_questions,
     )
 
 logger = logging.getLogger("quizpdf")
@@ -228,7 +224,12 @@ def process_cloud_pdf(
     cached = checkpoint.load()
 
     if cached is not None:
+        # Resume the exact prepared bundle without re-parsing.
         exam = cached.exam
+        logger.info(
+            "cloud=checkpoint parser_version=%s",
+            (exam.get("extra") or {}).get("parser_pipeline_version", "legacy"),
+        )
         questions = cached.questions
         crop_images = cached.crop_images
 
@@ -302,16 +303,8 @@ def process_cloud_pdf(
 
             report("question_extraction")
 
-            questions = (
-                parse_questions_by_pages(
-                    page_texts,
-                    name,
-                )
-                if page_texts
-                else parse_questions(
-                    markdown,
-                    name,
-                )
+            questions = _parse_upload_questions(
+                contents, page_texts, markdown, name,
             )
 
             if not questions:
@@ -376,6 +369,7 @@ def process_cloud_pdf(
                 "extraction_method": extraction_method,
                 "ocr_markdown": markdown,
                 "ocr_response": raw_response,
+                "parser_pipeline_version": PARSER_PIPELINE_VERSION,
             },
         }
 

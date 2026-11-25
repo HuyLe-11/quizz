@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pymupdf
 from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
@@ -46,10 +47,7 @@ try:
         crop_question_pdf,
         detect_red_mark_pdf,
     )
-    from backend.engine.quiz_parser import (
-        parse_questions,
-        parse_questions_by_pages,
-    )
+    from backend.engine.parser_pipeline import parse_pdf_questions
 
 except ModuleNotFoundError as exc:
     if exc.name != "backend":
@@ -72,10 +70,7 @@ except ModuleNotFoundError as exc:
         crop_question_pdf,
         detect_red_mark_pdf,
     )
-    from engine.quiz_parser import (
-        parse_questions,
-        parse_questions_by_pages,
-    )
+    from engine.parser_pipeline import parse_pdf_questions
 
 
 load_dotenv(
@@ -92,6 +87,48 @@ ALLOWED_MODELS = {
 logger = logging.getLogger("quizpdf")
 
 PDF_LOCK = threading.Lock()
+PARSER_PIPELINE_VERSION = "shared-v1"
+
+
+def _parse_upload_questions(
+    contents: bytes,
+    page_texts: list[str],
+    markdown: str,
+    name: str,
+) -> list[dict]:
+    """Use the same parser for SQLite and new cloud bundles."""
+    with PDF_LOCK:
+        try:
+            with pymupdf.open(stream=contents, filetype="pdf") as document:
+                if document.needs_pass or not len(document):
+                    raise ValueError("Encrypted or empty PDF")
+                expected_pages = len(document)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                400,
+                "Kh\u00f4ng th\u1ec3 m\u1edf PDF ho\u1eb7c PDF c\u00f3 m\u1eadt kh\u1ea9u.",
+            ) from exc
+
+        pages = list(page_texts)
+
+        if not pages and expected_pages == 1 and markdown.strip():
+            pages = [markdown]
+
+        if len(pages) != expected_pages:
+            logger.warning(
+                "parser=page_mismatch expected=%d actual=%d",
+                expected_pages,
+                len(pages),
+            )
+            raise HTTPException(
+                502,
+                "S\u1ed1 trang OCR kh\u00f4ng kh\u1edbp PDF g\u1ed1c. "
+                "Kh\u00f4ng l\u01b0u \u0111\u1ec1 \u0111\u1ec3 tr\u00e1nh sai trang ngu\u1ed3n.",
+            )
+
+        parsed = parse_pdf_questions(contents, pages, name)
+
+    return parsed["questions"]
 
 
 @asynccontextmanager
@@ -209,7 +246,7 @@ def _asset_url(
 def _needs_crop_fallback(
     question: dict,
 ) -> bool:
-    if question.get("parse_fallback"):
+    if question.get("parse_fallback") or question.get("requires_source_image"):
         return True
 
     text = " ".join(
@@ -561,16 +598,8 @@ def _process_pdf(
 
     page_texts = extract_page_texts(raw_response)
 
-    questions = (
-        parse_questions_by_pages(
-            page_texts,
-            name,
-        )
-        if page_texts
-        else parse_questions(
-            markdown,
-            name,
-        )
+    questions = _parse_upload_questions(
+        contents, page_texts, markdown, name,
     )
 
     if not questions:
@@ -800,6 +829,7 @@ def _process_pdf(
             "ocr_model": model,
             "ocr_markdown": markdown,
             "ocr_response": raw_response,
+            "parser_pipeline_version": PARSER_PIPELINE_VERSION,
         },
     }
 

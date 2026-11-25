@@ -6,82 +6,92 @@ import type {
   QuestionType,
 } from "../types/types";
 
-const STORAGE_PREFIX = "quiz_attempts_history_v2";
+const LOCAL_KEY = "quiz_attempts_history";
+const USER_PREFIX = "quiz_attempts_history_v2";
 
-let activeUserId: string | null = null;
+let activeKey: string | null = null;
 
-function storageKey(): string | null {
-  if (!activeUserId) {
-    return null;
-  }
+export function isQuestionAnswered(
+    answer: UserAnswer | undefined,
+): boolean {
+  if (!answer) return false;
 
-  return `${STORAGE_PREFIX}:${activeUserId}`;
+  return (
+      (answer.selected_options?.length ?? 0) > 0 ||
+      !!answer.true_false_value ||
+      Object.values(answer.matching_selections ?? {}).some(Boolean) ||
+      (answer.fill_in_values ?? []).some(
+          (value) => value.trim() !== "",
+      )
+  );
 }
 
 export function checkQuestionCorrectness(
     question: Question,
     answer: UserAnswer | undefined,
 ): boolean {
-  if (!answer) {
+  if (!isQuestionAnswered(answer) || !answer) {
     return false;
   }
 
   switch (question.type) {
     case "mcp": {
-      const selected = answer.selected_options || [];
+      const selected = new Set(
+          answer.selected_options ?? [],
+      );
 
-      const correct = question.user_confirmed_answer
-          ? [question.user_confirmed_answer]
-          : question.option_answer || [];
+      const correct = new Set(
+          question.user_confirmed_answer
+              ? [question.user_confirmed_answer]
+              : question.option_answer ?? [],
+      );
 
-      if (selected.length !== correct.length) {
-        return false;
-      }
-
-      return selected.every(
-          (value) => correct.includes(value),
+      return (
+          correct.size > 0 &&
+          selected.size === correct.size &&
+          [...selected].every(
+              (value) => correct.has(value),
+          )
       );
     }
 
     case "true_false_ng": {
-      const value = answer.true_false_value || "";
+      const correct = question.option_answer?.[0];
 
-      const correct =
-          question.option_answer?.[0] || "";
-
-      return value === correct;
+      return (
+          !!correct &&
+          answer.true_false_value === correct
+      );
     }
 
     case "matching": {
       const selections =
-          answer.matching_selections || {};
+          answer.matching_selections ?? {};
 
-      const matches = question.matches || [];
-
-      const validMatches = matches.filter(
-          (match) => match.description,
+      const matches = (question.matches ?? []).filter(
+          (m) => m.description,
       );
 
-      if (validMatches.length === 0) {
-        return false;
-      }
-
-      return validMatches.every(
-          (match, index) =>
-              selections[index] === match.answer,
+      return (
+          matches.length > 0 &&
+          matches.every(
+              (m, index) =>
+                  !!m.answer &&
+                  selections[index] === m.answer,
+          )
       );
     }
 
     case "fill_in": {
       const value = (
-          answer.fill_in_values?.[0] || ""
-      ).toLowerCase().trim();
+          answer.fill_in_values?.[0] ?? ""
+      ).trim().toLowerCase();
 
       return (
-          question.fill_in_answers || []
-      ).some(
-          (candidate) =>
-              candidate.toLowerCase().trim() === value,
+          !!value &&
+          (question.fill_in_answers ?? []).some(
+              (item) => item.trim().toLowerCase() === value,
+          )
       );
     }
 
@@ -91,17 +101,21 @@ export function checkQuestionCorrectness(
 }
 
 export const StatsService = {
+  // Only the standalone SQLite App enables this mode.
+  enableLocalHistory(): void {
+    activeKey = LOCAL_KEY;
+  },
+
   setUserId(userId: string | null): void {
-    activeUserId = userId;
+    activeKey = userId
+        ? `${USER_PREFIX}:${userId}`
+        : null;
   },
 
   saveAttempt(
-      attemptData: Omit<
-          QuizAttempt,
-          "id" | "completed_at"
-      >,
+      data: Omit<QuizAttempt, "id" | "completed_at">,
   ): QuizAttempt {
-    const key = storageKey();
+    const key = activeKey;
 
     if (!key) {
       throw new Error(
@@ -111,50 +125,38 @@ export const StatsService = {
 
     const attempts = this.getAttempts();
 
-    const newAttempt: QuizAttempt = {
-      ...attemptData,
+    const attempt: QuizAttempt = {
+      ...data,
       id:
           `attempt_${Date.now()}_` +
           Math.random().toString(36).slice(2, 9),
       completed_at: Date.now(),
     };
 
-    attempts.unshift(newAttempt);
-
     localStorage.setItem(
         key,
-        JSON.stringify(attempts),
+        JSON.stringify([attempt, ...attempts]),
     );
 
-    return newAttempt;
+    return attempt;
   },
 
   getAttempts(): QuizAttempt[] {
-    const key = storageKey();
-
-    if (!key) {
-      return [];
-    }
+    if (!activeKey) return [];
 
     try {
-      const stored = localStorage.getItem(key);
-
-      if (!stored) {
-        return [];
-      }
-
-      const parsed: unknown = JSON.parse(stored);
-
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-
-      return (parsed as QuizAttempt[]).sort(
-          (a, b) => b.completed_at - a.completed_at,
+      const parsed: unknown = JSON.parse(
+          localStorage.getItem(activeKey) ?? "[]",
       );
+
+      return Array.isArray(parsed)
+          ? (parsed as QuizAttempt[]).sort(
+              (a, b) => b.completed_at - a.completed_at,
+          )
+          : [];
     } catch (error) {
       console.error(
-          "Could not read local quiz history:",
+          "Could not read quiz history:",
           error,
       );
 
@@ -163,10 +165,8 @@ export const StatsService = {
   },
 
   clearHistory(): void {
-    const key = storageKey();
-
-    if (key) {
-      localStorage.removeItem(key);
+    if (activeKey) {
+      localStorage.removeItem(activeKey);
     }
   },
 
@@ -177,6 +177,7 @@ export const StatsService = {
       totalAttempts: attempts.length,
       avgScore: 0,
       totalTimeSpent: 0,
+
       byType: {
         mcp: {
           correct: 0,
@@ -199,48 +200,46 @@ export const StatsService = {
           percentage: 0,
         },
       },
+
       scoreProgress: [],
     };
 
-    if (attempts.length === 0) {
-      return stats;
-    }
+    if (!attempts.length) return stats;
 
     let totalScore = 0;
 
-    attempts.forEach((attempt) => {
+    for (const attempt of attempts) {
       totalScore += attempt.score;
       stats.totalTimeSpent += attempt.time_spent;
 
-      attempt.question_results?.forEach((result) => {
-        const type = result.type;
+      for (const result of attempt.question_results ?? []) {
+        const item = stats.byType[result.type];
 
-        if (!stats.byType[type]) {
-          return;
-        }
+        if (!item) continue;
 
-        stats.byType[type].total += 1;
+        item.total++;
 
         if (result.is_correct) {
-          stats.byType[type].correct += 1;
+          item.correct++;
         }
-      });
-    });
+      }
+    }
 
     stats.avgScore = Math.round(
         totalScore / attempts.length,
     );
 
-    Object.keys(stats.byType).forEach((key) => {
-      const type = key as QuestionType;
-      const item = stats.byType[type];
+    for (const key of Object.keys(
+        stats.byType,
+    ) as QuestionType[]) {
+      const item = stats.byType[key];
 
-      if (item.total > 0) {
+      if (item.total) {
         item.percentage = Math.round(
-            (item.correct / item.total) * 100,
+            (100 * item.correct) / item.total,
         );
       }
-    });
+    }
 
     stats.scoreProgress = attempts
         .slice()

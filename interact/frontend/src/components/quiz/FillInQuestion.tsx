@@ -1,5 +1,6 @@
 import { useQuiz } from "../../contexts/QuizContext";
 import type { Question } from "../../types/types";
+import { checkQuestionCorrectness } from "../../services/stats";
 
 interface FillInQuestionProps {
   question: Question;
@@ -26,9 +27,9 @@ export function FillInQuestion({ question }: FillInQuestionProps) {
   if (state.is_submitted) {
     // Simple exact match check (case insensitive). 
     // In reality, backend should evaluate this.
-    const isCorrect = question.fill_in_answers?.some(
-      ans => ans.toLowerCase() === val.toLowerCase().trim()
-    );
+    // BUGFIX(F4): this check did not trim the accepted answers, unlike the scoring in stats.ts,
+    // so the input could be painted red while the score counted it correct. Reuse the scorer.
+    const isCorrect = checkQuestionCorrectness(question, answer);
 
     if (isCorrect) {
       inputClass = "border-[var(--color-success)] bg-[var(--color-success-light)] dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300";

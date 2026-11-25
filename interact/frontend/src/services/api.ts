@@ -3,8 +3,6 @@
  * Supports authenticated requests and asynchronous PDF jobs.
  */
 
-import { requireSupabase } from "./supabase";
-
 import type {
     ApiResponse,
     Exam,
@@ -43,28 +41,78 @@ export function resolveApiUrl(
         : `${API_ORIGIN}${path}`;
 }
 
-async function getAuthorizationHeader(): Promise<string> {
-    const client = requireSupabase();
+type AuthorizationProvider = () => Promise<string>;
 
-    const {
-        data: { session },
-        error,
-    } = await client.auth.getSession();
+let authorization: AuthorizationProvider | null | undefined;
 
-    if (error) {
-        throw new Error(
-            `Không thể lấy phiên đăng nhập: ${error.message}`,
-        );
+export function configureLocalApi(): void {
+    authorization = null;
+}
+
+export function configureAuthenticatedApi(
+    provider: AuthorizationProvider,
+): void {
+    authorization = provider;
+}
+
+export function usesUploadJobs(): boolean {
+    return authorization !== null;
+}
+
+async function getAuthorizationHeader(): Promise<string | null> {
+    if (authorization === undefined) {
+        throw new Error("API mode has not been configured.");
     }
 
-    if (!session?.access_token) {
-        throw new Error(
-            "Phiên đăng nhập đã hết hạn. " +
-            "Vui lòng đăng nhập lại.",
-        );
+    if (authorization === null) return null;
+
+    const header = await authorization();
+
+    if (!header.trim()) {
+        throw new Error("Missing authorization header.");
     }
 
-    return `Bearer ${session.access_token}`;
+    return header;
+}
+
+function errorMessage(
+    payload: unknown,
+    fallback: string,
+): string {
+    if (!payload || typeof payload !== "object") {
+        return fallback;
+    }
+
+    const error = payload as {
+        detail?: unknown;
+        message?: unknown;
+    };
+
+    if (typeof error.detail === "string" && error.detail) {
+        return error.detail;
+    }
+
+    if (Array.isArray(error.detail)) {
+        const messages = error.detail.map((item: unknown) => {
+            if (
+                item &&
+                typeof item === "object" &&
+                "msg" in item
+            ) {
+                return String(item.msg);
+            }
+
+            return typeof item === "string" ? item : "";
+        }).filter(Boolean);
+
+        if (messages.length) {
+            return messages.join("; ");
+        }
+    }
+
+    return typeof error.message === "string" && error.message
+        ? error.message
+        : fallback;
 }
 
 async function fetchApi<T>(
@@ -74,10 +122,11 @@ async function fetchApi<T>(
 ): Promise<T> {
     const headers = new Headers(options?.headers);
 
-    headers.set(
-        "Authorization",
-        await getAuthorizationHeader(),
-    );
+    const authorizationHeader = await getAuthorizationHeader();
+
+    if (authorizationHeader !== null) {
+        headers.set("Authorization", authorizationHeader);
+    }
 
     if (
         options?.body != null &&
@@ -115,14 +164,10 @@ async function fetchApi<T>(
         });
 
         if (!response.ok) {
-            const message =
-                typeof payload?.detail === "string"
-                    ? payload.detail
-                    : typeof payload?.message === "string"
-                        ? payload.message
-                        : `Máy chủ gặp lỗi (${response.status}).`;
-
-            throw new Error(message);
+            throw new Error(errorMessage(
+                payload,
+                `HTTP ${response.status}`,
+            ));
         }
 
         if (
@@ -309,12 +354,14 @@ function createUploadForm(
 export async function uploadPdf(
     file: File,
     model = "PaddleOCR-VL-1.6",
+    signal?: AbortSignal,
 ): Promise<UploadResponse> {
     return fetchApi<UploadResponse>(
         "/upload",
         {
             method: "POST",
             body: createUploadForm(file, model),
+            signal,
         },
         MAX_POLLING_TIME_MS,
     );

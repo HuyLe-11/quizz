@@ -6,6 +6,8 @@ import {
   detectRedMark,
 } from "../../services/api";
 
+import { useQuiz } from "../../contexts/QuizContext";
+
 import type {
   Question,
   RedMarkDetection,
@@ -24,24 +26,17 @@ const statusText: Record<
   not_found: "Không tìm thấy dấu đỏ phù hợp",
 };
 
-/**
- * Reset question-specific state when the question
- * or its initial server data changes.
- */
 export function QuestionTools({
                                 question,
                               }: QuestionToolsProps) {
-  const stateKey = JSON.stringify([
-    question.question_record_id,
-    question.question_id,
-    question.red_mark_detection ?? null,
-    question.question_image_url ?? null,
-    question.user_confirmed_answer ?? null,
-  ]);
+  const { state } = useQuiz();
 
   return (
       <QuestionToolsState
-          key={stateKey}
+          key={JSON.stringify([
+            state.exam?.id,
+            question.question_record_id,
+          ])}
           question={question}
       />
   );
@@ -50,58 +45,43 @@ export function QuestionTools({
 function QuestionToolsState({
                               question,
                             }: QuestionToolsProps) {
-  const [
-    isDetectionEnabled,
-    setIsDetectionEnabled,
-  ] = useState(false);
+  const { state, updateQuestion } = useQuiz();
 
-  const [
-    isDetecting,
-    setIsDetecting,
-  ] = useState(false);
+  const examId = state.exam?.id;
+  const recordId = question.question_record_id;
 
-  const [
-    detection,
-    setDetection,
-  ] = useState<RedMarkDetection | null>(
-      question.red_mark_detection ?? null,
-  );
+  const [isDetectionEnabled, setIsDetectionEnabled] =
+      useState(false);
 
-  const [
-    selectedAnswer,
-    setSelectedAnswer,
-  ] = useState(
+  const [isDetecting, setIsDetecting] =
+      useState(false);
+
+  const [draft, setSelectedAnswer] =
+      useState<string | null>(null);
+
+  const [isSavingAnswer, setIsSavingAnswer] =
+      useState(false);
+
+  const [isCropping, setIsCropping] =
+      useState(false);
+
+  const [isImageOpen, setIsImageOpen] =
+      useState(false);
+
+  const [error, setError] =
+      useState<string | null>(null);
+
+  const detection =
+      question.red_mark_detection ?? null;
+
+  const selectedAnswer =
+      draft ??
       question.user_confirmed_answer ??
-      question.red_mark_detection?.detected_answer ??
-      "",
-  );
+      detection?.detected_answer ??
+      "";
 
-  const [
-    isSavingAnswer,
-    setIsSavingAnswer,
-  ] = useState(false);
-
-  const [
-    imageUrl,
-    setImageUrl,
-  ] = useState<string | null>(
-      question.question_image_url ?? null,
-  );
-
-  const [
-    isCropping,
-    setIsCropping,
-  ] = useState(false);
-
-  const [
-    isImageOpen,
-    setIsImageOpen,
-  ] = useState(false);
-
-  const [
-    error,
-    setError,
-  ] = useState<string | null>(null);
+  const imageUrl =
+      question.question_image_url ?? null;
 
   const canDetect =
       question.type === "mcp" &&
@@ -109,12 +89,15 @@ function QuestionToolsState({
 
   const hasStoredPdf =
       question.has_source_pdf !== false &&
-      question.question_record_id !== undefined;
+      !!recordId;
 
-  const runDetection = async (
-      force = false,
-  ) => {
-    if (!question.question_record_id) {
+  const runDetection = async (force = false) => {
+    if (
+        !examId ||
+        !recordId ||
+        isDetecting ||
+        isSavingAnswer
+    ) {
       return;
     }
 
@@ -123,17 +106,22 @@ function QuestionToolsState({
 
     try {
       const result = await detectRedMark(
-          question.question_record_id,
+          recordId,
           force,
       );
 
-      setDetection(result);
+      updateQuestion(examId, recordId, {
+        red_mark_detection: result,
 
-      setSelectedAnswer(
-          result.user_confirmed_answer ??
-          result.detected_answer ??
-          "",
-      );
+        ...(result.user_confirmed_answer !== undefined
+            ? {
+              user_confirmed_answer:
+              result.user_confirmed_answer,
+            }
+            : {}),
+      });
+
+      setSelectedAnswer(null);
     } catch (requestError) {
       setError(
           requestError instanceof Error
@@ -157,8 +145,11 @@ function QuestionToolsState({
 
   const saveConfirmation = async () => {
     if (
-        !question.question_record_id ||
-        !selectedAnswer
+        !examId ||
+        !recordId ||
+        !selectedAnswer ||
+        isSavingAnswer ||
+        isDetecting
     ) {
       return;
     }
@@ -168,11 +159,17 @@ function QuestionToolsState({
 
     try {
       const saved = await confirmRedAnswer(
-          question.question_record_id,
+          recordId,
           selectedAnswer,
       );
 
-      setDetection(saved);
+      updateQuestion(examId, recordId, {
+        red_mark_detection: saved,
+        user_confirmed_answer:
+            saved.user_confirmed_answer ?? null,
+      });
+
+      setSelectedAnswer(null);
     } catch (requestError) {
       setError(
           requestError instanceof Error
@@ -184,10 +181,8 @@ function QuestionToolsState({
     }
   };
 
-  const createCrop = async (
-      force = false,
-  ) => {
-    if (!question.question_record_id) {
+  const createCrop = async (force = false) => {
+    if (!examId || !recordId || isCropping) {
       return;
     }
 
@@ -196,11 +191,14 @@ function QuestionToolsState({
 
     try {
       const result = await cropQuestionImage(
-          question.question_record_id,
+          recordId,
           force,
       );
 
-      setImageUrl(result.image_url);
+      updateQuestion(examId, recordId, {
+        question_image_url: result.image_url,
+      });
+
       setIsImageOpen(true);
     } catch (requestError) {
       setError(
@@ -233,12 +231,11 @@ function QuestionToolsState({
                 disabled={
                     !canDetect ||
                     !hasStoredPdf ||
-                    isDetecting
+                    isDetecting ||
+                    isSavingAnswer
                 }
                 onChange={(event) =>
-                    handleDetectionToggle(
-                        event.target.checked,
-                    )
+                    handleDetectionToggle(event.target.checked)
                 }
                 className="h-4 w-4 accent-[var(--color-primary)]"
             />
@@ -257,9 +254,7 @@ function QuestionToolsState({
           {imageUrl ? (
               <button
                   type="button"
-                  onClick={() =>
-                      setIsImageOpen(true)
-                  }
+                  onClick={() => setIsImageOpen(true)}
                   className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
               >
                 Xem ảnh câu hỏi
@@ -267,13 +262,8 @@ function QuestionToolsState({
           ) : (
               <button
                   type="button"
-                  onClick={() =>
-                      void createCrop()
-                  }
-                  disabled={
-                      !hasStoredPdf ||
-                      isCropping
-                  }
+                  onClick={() => void createCrop()}
+                  disabled={!hasStoredPdf || isCropping}
                   className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCropping
@@ -285,30 +275,23 @@ function QuestionToolsState({
 
         {!canDetect && (
             <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-              Nhận diện dấu đỏ hiện hỗ trợ câu hỏi
-              trắc nghiệm có các lựa chọn.
+              Nhận diện dấu đỏ hiện hỗ trợ câu hỏi trắc nghiệm
+              có các lựa chọn.
             </p>
         )}
 
-        {!hasStoredPdf &&
-            question.question_record_id && (
-                <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-                  Đề cũ không còn PDF gốc để tạo ảnh
-                  hoặc nhận diện dấu.
-                </p>
-            )}
+        {!hasStoredPdf && question.question_record_id && (
+            <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+              Đề cũ không còn PDF gốc để tạo ảnh hoặc nhận diện dấu.
+            </p>
+        )}
 
         {isDetectionEnabled && detection && (
             <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
               <p className="text-sm font-medium text-[var(--color-text)]">
-                {statusText[detection.status]}
-                {" · trang "}
-                {detection.page_number}
-                {" · độ tin cậy "}
-                {Math.round(
-                    detection.confidence * 100,
-                )}
-                %
+                {statusText[detection.status]} · trang{" "}
+                {detection.page_number} · độ tin cậy{" "}
+                {Math.round(detection.confidence * 100)}%
               </p>
 
               {detection.detected_answer && (
@@ -327,9 +310,7 @@ function QuestionToolsState({
                   <select
                       value={selectedAnswer}
                       onChange={(event) =>
-                          setSelectedAnswer(
-                              event.target.value,
-                          )
+                          setSelectedAnswer(event.target.value)
                       }
                       className="ml-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[var(--color-text)]"
                   >
@@ -337,27 +318,24 @@ function QuestionToolsState({
                       Chưa chọn
                     </option>
 
-                    {question.options?.map(
-                        (option) => (
-                            <option
-                                key={option.label}
-                                value={option.label}
-                            >
-                              {option.label}
-                            </option>
-                        ),
-                    )}
+                    {question.options?.map((option) => (
+                        <option
+                            key={option.label}
+                            value={option.label}
+                        >
+                          {option.label}
+                        </option>
+                    ))}
                   </select>
                 </label>
 
                 <button
                     type="button"
-                    onClick={() =>
-                        void saveConfirmation()
-                    }
+                    onClick={() => void saveConfirmation()}
                     disabled={
                         !selectedAnswer ||
                         isSavingAnswer ||
+                        isDetecting ||
                         selectedAnswer ===
                         detection.user_confirmed_answer
                     }
@@ -372,10 +350,8 @@ function QuestionToolsState({
 
                 <button
                     type="button"
-                    onClick={() =>
-                        void runDetection(true)
-                    }
-                    disabled={isDetecting}
+                    onClick={() => void runDetection(true)}
+                    disabled={isDetecting || isSavingAnswer}
                     className="text-sm text-[var(--color-primary)] disabled:opacity-50"
                 >
                   Thử nhận diện lại
@@ -383,9 +359,8 @@ function QuestionToolsState({
               </div>
 
               <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-                Đáp án gốc không bị thay đổi.
-                Đáp án đã xác nhận được lưu riêng
-                và dùng khi chấm bài.
+                Đáp án gốc không bị thay đổi. Đáp án đã xác nhận
+                được lưu riêng và dùng khi chấm bài.
               </p>
             </div>
         )}
@@ -410,9 +385,7 @@ function QuestionToolsState({
                 <div className="mb-3 flex justify-end gap-3">
                   <button
                       type="button"
-                      onClick={() =>
-                          void createCrop(true)
-                      }
+                      onClick={() => void createCrop(true)}
                       disabled={isCropping}
                       className="text-sm text-[var(--color-primary)]"
                   >
@@ -423,9 +396,7 @@ function QuestionToolsState({
 
                   <button
                       type="button"
-                      onClick={() =>
-                          setIsImageOpen(false)
-                      }
+                      onClick={() => setIsImageOpen(false)}
                       className="text-sm text-[var(--color-text)]"
                   >
                     Đóng

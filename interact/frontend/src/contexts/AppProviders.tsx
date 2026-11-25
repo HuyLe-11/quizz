@@ -1,10 +1,3 @@
-/**
- * Application-level React providers.
- *
- * Keeps provider components separate from context
- * definitions and custom hooks for React Fast Refresh.
- */
-
 import {
     useReducer,
     useCallback,
@@ -15,50 +8,35 @@ import {
 
 import type {
     Exam,
-    UserAnswer,
+    Question,
     QuizState,
+    UserAnswer,
 } from "../types/types";
+
+import { QuizContext } from "./QuizContext";
+import { ThemeContext, type Theme } from "./ThemeContext";
 
 import {
     checkQuestionCorrectness,
+    isQuestionAnswered,
     StatsService,
 } from "../services/stats";
 
 import { MOCK_SUBJECTS } from "../data/mockData";
 import { saveQuizAttempt } from "../services/api";
 
-import { QuizContext } from "./QuizContext";
-
-import {
-    ThemeContext,
-    type Theme,
-} from "./ThemeContext";
-
-// ==================================================
-// Quiz Provider
-// ==================================================
-
 type QuizAction =
+    | { type: "START_QUIZ"; exam: Exam; startTime: number }
+    | { type: "SET_QUESTION_INDEX"; index: number }
+    | { type: "SET_ANSWER"; questionId: number; answer: UserAnswer }
+    | { type: "SUBMIT_QUIZ" }
     | {
-    type: "START_QUIZ";
-    exam: Exam;
-    startTime: number;
+    type: "UPDATE_QUESTION";
+    examId: string;
+    recordId: string;
+    patch: Partial<Question>;
 }
-    | {
-    type: "SET_QUESTION_INDEX";
-    index: number;
-}
-    | {
-    type: "SET_ANSWER";
-    questionId: number;
-    answer: UserAnswer;
-}
-    | {
-    type: "SUBMIT_QUIZ";
-}
-    | {
-    type: "RESET_QUIZ";
-};
+    | { type: "RESET_QUIZ" };
 
 const initialState: QuizState = {
     exam: null,
@@ -101,25 +79,26 @@ function quizReducer(
                 is_submitted: true,
             };
 
+        case "UPDATE_QUESTION":
+            if (!state.exam || state.exam.id !== action.examId) {
+                return state;
+            }
+
+            return {
+                ...state,
+                exam: {
+                    ...state.exam,
+                    questions: state.exam.questions.map((q) =>
+                        q.question_record_id === action.recordId
+                            ? { ...q, ...action.patch }
+                            : q,
+                    ),
+                },
+            };
+
         case "RESET_QUIZ":
             return initialState;
-
-        default:
-            return state;
     }
-}
-
-function getCurrentQuestion(
-    state: QuizState,
-) {
-    if (!state.exam) {
-        return null;
-    }
-
-    return (
-        state.exam.questions[state.current_index] ??
-        null
-    );
 }
 
 export function QuizProvider({
@@ -132,32 +111,23 @@ export function QuizProvider({
         initialState,
     );
 
-    const startQuiz = useCallback(
-        (exam: Exam) => {
-            dispatch({
-                type: "START_QUIZ",
-                exam,
-                startTime: Date.now(),
-            });
-        },
-        [],
-    );
+    const startQuiz = useCallback((exam: Exam) => {
+        dispatch({
+            type: "START_QUIZ",
+            exam,
+            startTime: Date.now(),
+        });
+    }, []);
 
-    const goToQuestion = useCallback(
-        (index: number) => {
-            dispatch({
-                type: "SET_QUESTION_INDEX",
-                index,
-            });
-        },
-        [],
-    );
+    const goToQuestion = useCallback((index: number) => {
+        dispatch({
+            type: "SET_QUESTION_INDEX",
+            index,
+        });
+    }, []);
 
     const setAnswer = useCallback(
-        (
-            questionId: number,
-            answer: UserAnswer,
-        ) => {
+        (questionId: number, answer: UserAnswer) => {
             dispatch({
                 type: "SET_ANSWER",
                 questionId,
@@ -167,146 +137,116 @@ export function QuizProvider({
         [],
     );
 
+    const updateQuestion = useCallback(
+        (
+            examId: string,
+            recordId: string,
+            patch: Partial<Question>,
+        ) => {
+            dispatch({
+                type: "UPDATE_QUESTION",
+                examId,
+                recordId,
+                patch,
+            });
+        },
+        [],
+    );
+
+    const resetQuiz = useCallback(() => {
+        dispatch({ type: "RESET_QUIZ" });
+    }, []);
+
     const submitQuiz = useCallback(() => {
-        if (
-            !state.exam ||
-            state.is_submitted
-        ) {
+        if (!state.exam || state.is_submitted) {
             return;
         }
 
-        const question_results =
-            state.exam.questions.map(
-                (question) => ({
-                    question_id: question.question_id,
-                    type: question.type,
-                    is_correct: checkQuestionCorrectness(
-                        question,
-                        state.answers[question.question_id],
-                    ),
-                }),
-            );
+        const exam = state.exam;
+
+        const question_results = exam.questions.map((q) => ({
+            question_id: q.question_id,
+            type: q.type,
+            is_correct: checkQuestionCorrectness(
+                q,
+                state.answers[q.question_id],
+            ),
+        }));
 
         const correct_answers_count =
-            question_results.filter(
-                (item) => item.is_correct,
-            ).length;
+            question_results.filter((q) => q.is_correct).length;
 
-        const total_questions =
-            question_results.length;
+        const total_questions = question_results.length;
 
-        const score =
-            total_questions > 0
-                ? Math.round(
-                    (correct_answers_count /
-                        total_questions) *
-                    100,
-                )
-                : 0;
-
-        const time_spent = state.start_time
+        const score = total_questions
             ? Math.round(
-                (Date.now() - state.start_time) /
-                1000,
+                (100 * correct_answers_count) / total_questions,
             )
             : 0;
 
+        const time_spent = state.start_time
+            ? Math.round((Date.now() - state.start_time) / 1000)
+            : 0;
+
         const subject = MOCK_SUBJECTS.find(
-            (item) =>
-                item.id === state.exam?.subject_id,
+            (item) => item.id === exam.subject_id,
         );
 
-        // Preserve the existing local attempt history.
-
-        StatsService.saveAttempt({
-            exam_id: state.exam.id,
-            exam_title: state.exam.title,
-            subject_id: state.exam.subject_id,
-            subject_name:
-                subject?.name ?? "Chưa xác định",
+        const result = {
             score,
             total_questions,
             correct_answers_count,
             time_spent,
             answers: state.answers,
             question_results,
+        };
+
+        StatsService.saveAttempt({
+            ...result,
+            exam_id: exam.id,
+            exam_title: exam.title,
+            subject_id: exam.subject_id,
+            subject_name: subject?.name ?? "Chưa xác định",
         });
 
-        // Preserve backend persistence for uploaded exams.
+        if (!exam.id.startsWith("exam-")) {
+            void saveQuizAttempt(exam.id, {
+                ...result,
+                completed_at: Date.now(),
+            }).catch(() => undefined);
+        }
 
-        if (!state.exam.id.startsWith("exam-")) {
-            void saveQuizAttempt(
-                state.exam.id,
-                {
-                    score,
-                    total_questions,
-                    correct_answers_count,
-                    time_spent,
-                    answers: state.answers,
-                    question_results,
-                    completed_at: Date.now(),
-                },
-            ).catch(() => undefined);
+        dispatch({ type: "SUBMIT_QUIZ" });
+    }, [state]);
+
+    const nextQuestion = useCallback(() => {
+        if (
+            !state.exam ||
+            state.current_index + 1 >= state.exam.questions.length
+        ) {
+            return false;
         }
 
         dispatch({
-            type: "SUBMIT_QUIZ",
+            type: "SET_QUESTION_INDEX",
+            index: state.current_index + 1,
         });
-    }, [state]);
 
-    const resetQuiz = useCallback(() => {
+        return true;
+    }, [state.exam, state.current_index]);
+
+    const prevQuestion = useCallback(() => {
+        if (state.current_index <= 0) {
+            return false;
+        }
+
         dispatch({
-            type: "RESET_QUIZ",
+            type: "SET_QUESTION_INDEX",
+            index: state.current_index - 1,
         });
-    }, []);
 
-    const nextQuestion = useCallback(
-        (): boolean => {
-            if (!state.exam) {
-                return false;
-            }
-
-            const nextIdx =
-                state.current_index + 1;
-
-            if (
-                nextIdx >=
-                state.exam.questions.length
-            ) {
-                return false;
-            }
-
-            dispatch({
-                type: "SET_QUESTION_INDEX",
-                index: nextIdx,
-            });
-
-            return true;
-        },
-        [state.exam, state.current_index],
-    );
-
-    const prevQuestion = useCallback(
-        (): boolean => {
-            if (state.current_index <= 0) {
-                return false;
-            }
-
-            dispatch({
-                type: "SET_QUESTION_INDEX",
-                index: state.current_index - 1,
-            });
-
-            return true;
-        },
-        [state.current_index],
-    );
-
-    const currentQuestion =
-        getCurrentQuestion(state);
-
-    const answeredCount =
-        Object.keys(state.answers).length;
+        return true;
+    }, [state.current_index]);
 
     return (
         <QuizContext.Provider
@@ -317,10 +257,14 @@ export function QuizProvider({
                 setAnswer,
                 submitQuiz,
                 resetQuiz,
+                updateQuestion,
                 nextQuestion,
                 prevQuestion,
-                currentQuestion,
-                answeredCount,
+                currentQuestion:
+                    state.exam?.questions[state.current_index] ?? null,
+                answeredCount:
+                Object.values(state.answers)
+                    .filter(isQuestionAnswered).length,
             }}
         >
             {children}
@@ -328,36 +272,18 @@ export function QuizProvider({
     );
 }
 
-// ==================================================
-// Theme Provider
-// ==================================================
+const THEME_KEY = "quiz-app-theme";
 
-const STORAGE_KEY = "quiz-app-theme";
-
-/**
- * Read the initial theme from local storage
- * or the operating system preference.
- */
 function getInitialTheme(): Theme {
-    const stored =
-        localStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(THEME_KEY);
 
-    if (
-        stored === "light" ||
-        stored === "dark"
-    ) {
+    if (stored === "light" || stored === "dark") {
         return stored;
     }
 
-    if (
-        window.matchMedia(
-            "(prefers-color-scheme: dark)",
-        ).matches
-    ) {
-        return "dark";
-    }
-
-    return "light";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
 }
 
 export function ThemeProvider({
@@ -368,40 +294,23 @@ export function ThemeProvider({
     const [theme, setTheme] =
         useState<Theme>(getInitialTheme);
 
-    // Synchronize React state with the DOM and localStorage.
-
     useEffect(() => {
-        const root =
-            document.documentElement;
-
-        root.classList.remove(
+        document.documentElement.classList.remove(
             "light",
             "dark",
         );
 
-        root.classList.add(theme);
+        document.documentElement.classList.add(theme);
 
-        localStorage.setItem(
-            STORAGE_KEY,
-            theme,
-        );
+        localStorage.setItem(THEME_KEY, theme);
     }, [theme]);
 
     const toggleTheme = useCallback(() => {
-        setTheme((previousTheme) =>
-            previousTheme === "light"
-                ? "dark"
-                : "light",
-        );
+        setTheme((prev) => prev === "light" ? "dark" : "light");
     }, []);
 
     return (
-        <ThemeContext.Provider
-            value={{
-                theme,
-                toggleTheme,
-            }}
-        >
+        <ThemeContext.Provider value={{ theme, toggleTheme }}>
             {children}
         </ThemeContext.Provider>
     );

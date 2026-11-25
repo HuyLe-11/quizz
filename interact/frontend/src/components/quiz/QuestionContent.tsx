@@ -1,288 +1,190 @@
-import React, { useMemo } from 'react';
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import python from 'highlight.js/lib/languages/python';
-import xml from 'highlight.js/lib/languages/xml';
-import css from 'highlight.js/lib/languages/css';
-import bash from 'highlight.js/lib/languages/bash';
-import json from 'highlight.js/lib/languages/json';
-import 'highlight.js/styles/github-dark.css';
+import { Fragment, useMemo, type ReactNode } from "react";
+import hljs from "highlight.js/lib/core";
+import javascript from "highlight.js/lib/languages/javascript";
+import python from "highlight.js/lib/languages/python";
+import xml from "highlight.js/lib/languages/xml";
+import css from "highlight.js/lib/languages/css";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import "highlight.js/styles/github-dark.css";
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import { splitUnderlineRuns } from "../../utils/underlineRuns";
 
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
-
-// Register common languages
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('xml', xml);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('json', json);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("json", json);
 
 interface QuestionContentProps {
-  content: string;
-  className?: string;
+    content: string;
+    className?: string;
 }
 
-/**
- * Parses content containing text, markdown images,
- * code blocks, and LaTeX.
- */
-function parseContent(text: string): React.ReactNode[] {
-  if (!text) return [];
+function renderPlainText(text: string, key: string): ReactNode[] {
+    return text.split("\n").map((line, index) => (
+        <Fragment key={`${key}-${index}`}>
+            {index > 0 && <br />}
+            {splitUnderlineRuns(line).map((run, i) => (
+                <span key={i} style={run.underlined ? {
+                    textDecorationLine: "underline",
+                    textDecorationThickness: "1px",
+                    textUnderlineOffset: "0.13em",
+                    textDecorationSkipInk: "none",
+                } : undefined}>{run.text}</span>
+            ))}
+        </Fragment>
+    ));
+}
 
-  const parts: React.ReactNode[] = [];
-  const currentText = text;
-  let keyIdx = 0;
+function renderMath(
+    source: string,
+    displayMode: boolean,
+    key: string,
+): ReactNode {
+    try {
+        const html = katex.renderToString(source, {
+            displayMode,
+            throwOnError: false,
+            trust: false,
+        });
 
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+        return displayMode
+            ? <div key={key} className="my-2" dangerouslySetInnerHTML={{ __html: html }} />
+            : <span key={key} dangerouslySetInnerHTML={{ __html: html }} />;
+    } catch {
+        return <span key={key}>{source}</span>;
+    }
+}
 
-  let lastIdx = 0;
-  let match;
+function parseInline(text: string, key: string): ReactNode[] {
+    const result: ReactNode[] = [];
+    const tokens = /\$\$([\s\S]*?)\$\$|\$([^\n]*?)\$|!\[(.*?)\]\((.*?)\)/g;
 
-  const parseInline = (
-      str: string,
-      baseKey: number,
-  ) => {
-    const inlineParts: React.ReactNode[] = [];
+    let previous = 0;
 
-    const tokenRegex =
-        /\$\$(.*?)\$\$|\$(.*?)\$|!\[(.*?)\]\((.*?)\)/g;
+    for (const match of text.matchAll(tokens)) {
+        const index = match.index;
+        const id = `${key}-${index}`;
 
-    let inlineLastIdx = 0;
-    let inlineMatch;
-
-    while (
-        (inlineMatch = tokenRegex.exec(str)) !== null
-        ) {
-      if (inlineMatch.index > inlineLastIdx) {
-        const textPart = str.substring(
-            inlineLastIdx,
-            inlineMatch.index,
+        result.push(
+            ...renderPlainText(
+                text.slice(previous, index),
+                `${id}-text`,
+            ),
         );
 
-        if (textPart) {
-          const lines = textPart.split('\n');
-
-          lines.forEach((line, i) => {
-            if (line) {
-              inlineParts.push(
-                  <span
-                      key={`text-${baseKey}-${inlineLastIdx}-${i}`}
-                  >
-                  {line}
-                </span>,
-              );
-            }
-
-            if (i < lines.length - 1) {
-              inlineParts.push(
-                  <br
-                      key={`br-${baseKey}-${inlineLastIdx}-${i}`}
-                  />,
-              );
-            }
-          });
+        if (match[1] !== undefined) {
+            result.push(renderMath(match[1], true, id));
+        } else if (match[2] !== undefined) {
+            result.push(renderMath(match[2], false, id));
+        } else if (match[4] !== undefined) {
+            result.push(
+                <img
+                    key={id}
+                    src={match[4]}
+                    alt={match[3] || "Image"}
+                    className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
+                    loading="lazy"
+                />,
+            );
         }
-      }
 
-      if (inlineMatch[1]) {
-        // Block math: $$...$$
-        try {
-          const html = katex.renderToString(
-              inlineMatch[1],
-              {
-                displayMode: true,
-                throwOnError: false,
-              },
-          );
-
-          inlineParts.push(
-              <div
-                  key={`math-block-${baseKey}-${inlineMatch.index}`}
-                  dangerouslySetInnerHTML={{
-                    __html: html,
-                  }}
-                  className="my-2"
-              />,
-          );
-        } catch {
-          inlineParts.push(
-              <div
-                  key={`math-err-${baseKey}-${inlineMatch.index}`}
-              >
-                {inlineMatch[1]}
-              </div>,
-          );
-        }
-      } else if (inlineMatch[2]) {
-        // Inline math: $...$
-        try {
-          const html = katex.renderToString(
-              inlineMatch[2],
-              {
-                displayMode: false,
-                throwOnError: false,
-              },
-          );
-
-          inlineParts.push(
-              <span
-                  key={`math-inline-${baseKey}-${inlineMatch.index}`}
-                  dangerouslySetInnerHTML={{
-                    __html: html,
-                  }}
-              />,
-          );
-        } catch {
-          inlineParts.push(
-              <span
-                  key={`math-err-${baseKey}-${inlineMatch.index}`}
-              >
-              {inlineMatch[2]}
-            </span>,
-          );
-        }
-      } else if (inlineMatch[4]) {
-        // Markdown image: ![alt](url)
-        inlineParts.push(
-            <img
-                key={`img-${baseKey}-${inlineMatch.index}`}
-                src={inlineMatch[4]}
-                alt={inlineMatch[3] || "hình ảnh"}
-                className="max-w-full h-auto rounded-md my-3 border border-[var(--color-border)]"
-                loading="lazy"
-            />,
-        );
-      }
-
-      inlineLastIdx = tokenRegex.lastIndex;
+        previous = index + match[0].length;
     }
 
-    if (inlineLastIdx < str.length) {
-      const textPart = str.substring(
-          inlineLastIdx,
-      );
+    result.push(
+        ...renderPlainText(
+            text.slice(previous),
+            `${key}-tail`,
+        ),
+    );
 
-      const lines = textPart.split('\n');
+    return result;
+}
 
-      lines.forEach((line, i) => {
-        if (line) {
-          inlineParts.push(
-              <span key={`text-end-${baseKey}-${i}`}>
-              {line}
-            </span>,
-          );
-        }
-
-        if (i < lines.length - 1) {
-          inlineParts.push(
-              <br key={`br-end-${baseKey}-${i}`} />,
-          );
-        }
-      });
-    }
-
-    return inlineParts;
-  };
-
-  while (
-      (match = codeBlockRegex.exec(currentText)) !== null
-      ) {
-    if (match.index > lastIdx) {
-      parts.push(
-          ...parseInline(
-              currentText.substring(
-                  lastIdx,
-                  match.index,
-              ),
-              keyIdx++,
-          ),
-      );
-    }
-
-    const lang = match[1] || 'plaintext';
-    const code = match[2];
-
+function renderCode(
+    language: string,
+    source: string,
+    key: string,
+): ReactNode {
     let highlighted: string | null = null;
 
     try {
-      if (lang && hljs.getLanguage(lang)) {
-        highlighted = hljs.highlight(
-            code,
-            {
-              language: lang,
-            },
-        ).value;
-      } else {
-        highlighted = hljs.highlightAuto(
-            code,
-        ).value;
-      }
+        highlighted = hljs.getLanguage(language)
+            ? hljs.highlight(source, { language }).value
+            : hljs.highlightAuto(source).value;
     } catch {
-      // Render the original code as plain text
-      // if highlighting fails.
+        // React escapes the original source when highlighting fails.
     }
 
-    parts.push(
-        <pre
-            key={`code-${keyIdx++}`}
-            className="my-3 relative group"
-        >
-        {lang && (
-            <div className="absolute top-0 right-0 px-2 py-1 text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-secondary)] rounded-bl-md rounded-tr-md border-b border-l border-[var(--color-border)] opacity-50 group-hover:opacity-100 transition-opacity">
-              {lang}
-            </div>
-        )}
+    const className =
+        `hljs language-${language} block overflow-x-auto p-4 rounded-md text-sm`;
 
-          {highlighted === null ? (
-              <code
-                  className={`hljs language-${lang} block overflow-x-auto p-4 rounded-md text-sm`}
-              >
-                {code}
-              </code>
-          ) : (
-              <code
-                  dangerouslySetInnerHTML={{
-                    __html: highlighted,
-                  }}
-                  className={`hljs language-${lang} block overflow-x-auto p-4 rounded-md text-sm`}
-              />
-          )}
-      </pre>,
+    return (
+        <pre key={key} className="my-3 relative group">
+      <span className="absolute top-0 right-0 px-2 py-1 text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-secondary)]">
+        {language}
+      </span>
+
+            {highlighted === null
+                ? <code className={className}>{source}</code>
+                : <code
+                    className={className}
+                    dangerouslySetInnerHTML={{ __html: highlighted }}
+                />}
+    </pre>
     );
-
-    lastIdx = codeBlockRegex.lastIndex;
-  }
-
-  if (lastIdx < currentText.length) {
-    parts.push(
-        ...parseInline(
-            currentText.substring(lastIdx),
-            keyIdx,
-        ),
-    );
-  }
-
-  return parts;
 }
 
-/**
- * Renders rich content for questions,
- * options, and explanations.
- */
-export function QuestionContent({
-                                  content,
-                                  className = "",
-                                }: QuestionContentProps) {
-  const renderedContent = useMemo(
-      () => parseContent(content),
-      [content],
-  );
+function parseContent(text: string): ReactNode[] {
+    const result: ReactNode[] = [];
+    const codeBlocks = /```([\w+-]*)\r?\n([\s\S]*?)```/g;
 
-  return (
-      <div className={`leading-relaxed ${className}`}>
-        {renderedContent}
-      </div>
-  );
+    let previous = 0;
+
+    for (const match of text.matchAll(codeBlocks)) {
+        const index = match.index;
+
+        result.push(
+            ...parseInline(
+                text.slice(previous, index),
+                `before-${index}`,
+            ),
+        );
+
+        result.push(
+            renderCode(
+                match[1] || "plaintext",
+                match[2],
+                `code-${index}`,
+            ),
+        );
+
+        previous = index + match[0].length;
+    }
+
+    result.push(
+        ...parseInline(text.slice(previous), "tail"),
+    );
+
+    return result;
+}
+
+export function QuestionContent({
+                                    content,
+                                    className = "",
+                                }: QuestionContentProps) {
+    const rendered = useMemo(
+        () => parseContent(content || ""),
+        [content],
+    );
+
+    return (
+        <div className={`leading-relaxed ${className}`}>
+            {rendered}
+        </div>
+    );
 }

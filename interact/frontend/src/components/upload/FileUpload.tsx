@@ -15,6 +15,8 @@ import {
   createUploadJob,
   isActiveUploadJob,
   waitForUploadJob,
+  uploadPdf,
+  usesUploadJobs,
 } from "../../services/api";
 
 import type {
@@ -38,16 +40,12 @@ const PROCESSING_STEPS = [
     label: "Phân tích câu hỏi",
   },
   {
-    phase: "source_pdf_save",
-    label: "Lưu PDF gốc",
-  },
-  {
     phase: "question_crops",
     label: "Xử lý ảnh câu hỏi",
   },
   {
-    phase: "sqlite_save",
-    label: "Lưu đề thi vào SQLite",
+    phase: "cloud_save",
+    label: "Lưu đề thi",
   },
 ] as const;
 
@@ -59,6 +57,7 @@ const PHASE_LABELS: Record<UploadJobPhase, string> = {
   source_pdf_save: "Đang lưu PDF gốc",
   question_crops: "Đang xử lý ảnh câu hỏi",
   sqlite_save: "Đang lưu đề thi",
+  cloud_save: "Đang lưu đề thi",
   completed: "Đã hoàn thành",
 };
 
@@ -104,8 +103,14 @@ function getCompletedSteps(
     return 1;
   }
 
+  const phase = job.phase === "sqlite_save"
+      ? "cloud_save"
+      : job.phase === "source_pdf_save"
+          ? "question_crops"
+          : job.phase;
+
   const index = PROCESSING_STEPS.findIndex(
-      (step) => step.phase === job.phase,
+      (step) => step.phase === phase,
   );
 
   return Math.max(1, index);
@@ -357,6 +362,22 @@ export function FileUpload() {
     );
 
     try {
+      if (!usesUploadJobs()) {
+        const result = await uploadPdf(
+            file,
+            model,
+            controller.signal,
+        );
+
+        controller.signal.throwIfAborted();
+
+        navigate(
+            `/quiz/${encodeURIComponent(result.exam_id)}`,
+        );
+
+        return;
+      }
+
       let currentJob: UploadJob;
 
       if (existingJob) {
@@ -418,7 +439,9 @@ export function FileUpload() {
   };
 
   const phaseLabel = !job
-      ? "Đang tải tệp PDF lên máy chủ"
+      ? (usesUploadJobs()
+          ? "Đang tải tệp PDF lên máy chủ"
+          : "Đang xử lý PDF (không có tiến độ từng giai đoạn)")
       : PHASE_LABELS[job.phase] ||
       "Đang xử lý tài liệu";
 
@@ -621,6 +644,7 @@ export function FileUpload() {
                       {progressLabel}
                     </p>
 
+                    {usesUploadJobs() && <>
                     <div className="space-y-3">
                       {PROCESSING_STEPS.map(
                           (step, index) => {
@@ -722,6 +746,7 @@ export function FileUpload() {
                 </span>
                     </div>
 
+                    </>}
                     {!isUploading && hasActiveJob && (
                         <p className="mt-3 text-xs text-[var(--color-text-secondary)]">
                           Tác vụ có thể vẫn đang được xử lý
