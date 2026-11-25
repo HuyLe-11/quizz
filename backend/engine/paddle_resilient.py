@@ -17,6 +17,7 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from . import paddle_client as client
+from .registered_ocr_context import remember_completed_batch
 
 from .ocr_job_journal import (
     DEFAULT_PATH,
@@ -608,6 +609,11 @@ def _process_batch(
                         job_id,
                     )
 
+                    remember_completed_batch(
+                        journal, batch, model, record.claim_id,
+                        job_id, pages,
+                    )
+
                     return job_id, pages, info
 
                 # Missing or corrupted cache:
@@ -730,6 +736,12 @@ def _process_batch(
             job_id,
             len(pages),
         )
+
+        if saved:
+            remember_completed_batch(
+                journal, batch, model, record.claim_id,
+                job_id, pages,
+            )
 
     return job_id, pages, info
 
