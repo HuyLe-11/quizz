@@ -79,13 +79,9 @@ Progress = Callable[[str], None]
 def _fallback_question(exam_id: str) -> dict:
     return {
         "composite_id": f"{exam_id}_Q01",
-
         "question_id": 1,
-
         "type": "fill_in",
-
         "multiple_choice": False,
-
         "question_content": [
             {
                 "type": "text",
@@ -95,17 +91,11 @@ def _fallback_question(exam_id: str) -> dict:
                 ),
             },
         ],
-
         "explanation_content": [],
-
         "mcp_options": [],
-
         "match_pairs": [],
-
         "fill_in_answers": [],
-
         "page_number": 1,
-
         "parse_fallback": True,
     }
 
@@ -147,15 +137,9 @@ def _prepare_question(
 
     default_asset = {
         "image_path": None,
-
-        "page_number": question.get(
-            "page_number"
-        ),
-
+        "page_number": question.get("page_number"),
         "crop_coordinates": None,
-
         "crop_status": "not_created",
-
         "source": None,
     }
 
@@ -175,16 +159,12 @@ def _prepare_question(
         with PDF_LOCK:
             asset = crop_question_pdf(
                 pdf_path,
-
                 question.get(
                     "source_question_number",
                     question["question_id"],
                 ),
-
                 question.get("page_number"),
-
                 output_path,
-
                 ocr_pages=ocr_pages,
             )
 
@@ -226,7 +206,6 @@ def _prepare_question(
 
         question["asset"] = {
             **default_asset,
-
             "crop_status": "failed",
         }
 
@@ -280,7 +259,6 @@ def process_cloud_pdf(
 
         logger.info(
             "cloud=checkpoint parser_version=%s",
-
             (exam.get("extra") or {}).get(
                 "parser_pipeline_version",
                 "legacy",
@@ -294,11 +272,8 @@ def process_cloud_pdf(
         logger.info(
             "cloud=checkpoint status=restored "
             "exam=%s questions=%d cropped=%d",
-
             exam["id"],
-
             len(questions),
-
             len(crop_images),
         )
 
@@ -313,11 +288,8 @@ def process_cloud_pdf(
         logger.info(
             "cloud=upload status=started "
             "exam=%s bytes=%d model=%s",
-
             exam_id,
-
             len(contents),
-
             model,
         )
 
@@ -334,9 +306,13 @@ def process_cloud_pdf(
 
             report("ocr")
 
+            # Enable durable OCR job recovery using the
+            # authenticated owner and original PDF filename.
             markdown, raw_response = recognize_pdf(
                 str(pdf_path),
                 model,
+                user_id=user_id,
+                filename=filename,
             )
 
             ocr_pages = (
@@ -354,22 +330,16 @@ def process_cloud_pdf(
                     "extraction_method",
                     "paddleocr",
                 )
-
                 if isinstance(raw_response, dict)
-
                 else "paddleocr"
             )
 
             logger.info(
                 "cloud=recognition status=completed "
                 "exam=%s method=%s pages=%d characters=%d",
-
                 exam_id,
-
                 extraction_method,
-
                 len(page_texts),
-
                 len(markdown or ""),
             )
 
@@ -377,11 +347,8 @@ def process_cloud_pdf(
 
             questions = _parse_upload_questions(
                 contents,
-
                 page_texts,
-
                 markdown,
-
                 name,
             )
 
@@ -397,9 +364,7 @@ def process_cloud_pdf(
             logger.info(
                 "cloud=question_extraction status=completed "
                 "exam=%s questions=%d",
-
                 exam_id,
-
                 len(questions),
             )
 
@@ -413,68 +378,45 @@ def process_cloud_pdf(
 
             normalized_pages = (
                 ocr_pages
-
                 if isinstance(ocr_pages, list)
-
                 else []
             )
 
             for question in questions:
                 _prepare_question(
                     question,
-
                     exam_id=exam_id,
-
                     pdf_path=pdf_path,
-
                     crop_directory=crop_directory,
-
                     ocr_pages=normalized_pages,
-
                     crop_images=crop_images,
                 )
 
         exam = {
             "id": exam_id,
-
             "name": name,
-
             "subject": None,
-
             "year": None,
-
             "author": None,
-
             "uploaded_by": None,
-
             "duration_minutes": None,
-
             "source_file": filename,
-
             "source_path": None,
-
             "source_sha256": hashlib.sha256(
                 contents
             ).hexdigest(),
-
             "uploaded_at": (
                 datetime.now(
                     timezone.utc
                 ).isoformat()
             ),
-
             "extra": {
                 "ocr_model": model,
-
                 "extraction_method": extraction_method,
-
                 "ocr_markdown": markdown,
-
                 "ocr_response": raw_response,
-
                 "parser_pipeline_version":
                     PARSER_PIPELINE_VERSION,
-
                 "parser_review":
                     build_parser_review_snapshot(
                         questions
@@ -497,7 +439,6 @@ def process_cloud_pdf(
             logger.warning(
                 "cloud=checkpoint status=save_failed "
                 "error_type=%s",
-
                 type(exc).__name__,
             )
 
@@ -522,18 +463,15 @@ def process_cloud_pdf(
                 logger.info(
                     "cloud=checkpoint status=already_saved "
                     "exam=%s",
-
                     exam["id"],
                 )
 
                 return {
                     "exam_id": exam["id"],
-
                     "title": existing.get(
                         "name",
                         exam["name"],
                     ),
-
                     "question_count": len(
                         existing.get("questions") or []
                     ),
@@ -541,13 +479,9 @@ def process_cloud_pdf(
 
         result = repository.save_exam_bundle(
             exam,
-
             questions,
-
             contents,
-
             crop_images,
-
             resume_existing=(cached is not None),
         )
 
@@ -556,13 +490,9 @@ def process_cloud_pdf(
     logger.info(
         "cloud=upload status=completed "
         "exam=%s method=%s questions=%d cropped=%d",
-
         exam["id"],
-
         exam["extra"]["extraction_method"],
-
         len(questions),
-
         len(crop_images),
     )
 
