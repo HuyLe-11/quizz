@@ -1,20 +1,36 @@
-"""Cloud OCR with bounded submission and polling recovery."""
+"""Cloud OCR with bounded recovery and durable job tracking."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import tempfile
 import time
+
 from pathlib import Path
 from typing import Any, Callable
 
+import pymupdf
 import requests
+
 from urllib3.exceptions import ReadTimeoutError
 
 from . import paddle_client as client
 
+from .ocr_job_journal import (
+    DEFAULT_PATH,
+    JournalStateError,
+    OCRJobJournal,
+    upload_scope,
+)
+
+
 logger = logging.getLogger("quizpdf")
+
+
+class UnconnectedSubmissionError(client.PaddleOCRTimeoutError):
+    """All attempted submissions ended in direct ConnectTimeout."""
 
 
 def _optional_payload(model: str) -> dict[str, bool]:
@@ -23,10 +39,15 @@ def _optional_payload(model: str) -> dict[str, bool]:
             "useDocOrientationClassify": False,
             "useDocUnwarping": False,
         }
+
     return {}
 
 
-def _log_geometry(pages: list[dict], job_id: str) -> None:
+def _log_geometry(
+    pages: list[dict],
+    job_id: str,
+) -> None:
+
     for index, page in enumerate(pages, 1):
         root = page.get("pruned_result")
         root = root if isinstance(root, dict) else {}
@@ -40,6 +61,7 @@ def _log_geometry(pages: list[dict], job_id: str) -> None:
         blocks = root.get("parsing_res_list")
 
         root_settings = root.get("model_settings")
+
         root_settings = (
             root_settings
             if isinstance(root_settings, dict)
@@ -62,6 +84,7 @@ def _log_geometry(pages: list[dict], job_id: str) -> None:
 
 
 def _recoverable(error: Exception) -> bool:
+
     if isinstance(error, client.PaddleOCRTimeoutError):
         return True
 
@@ -87,8 +110,11 @@ def _with_recovery(
     seconds: float,
     recovery: float,
 ) -> Any:
+
     try:
-        return operation(time.monotonic() + seconds)
+        return operation(
+            time.monotonic() + seconds
+        )
 
     except Exception as exc:
         if not _recoverable(exc):
@@ -103,7 +129,9 @@ def _with_recovery(
             type(exc).__name__,
         )
 
-    return operation(time.monotonic() + recovery)
+    return operation(
+        time.monotonic() + recovery
+    )
 
 
 def _poll(
@@ -116,6 +144,7 @@ def _poll(
     interval = 3.0
 
     while True:
+
         response = client._get_with_retries(
             f"{job_url.rstrip('/')}/{job_id}",
             stage="job status polling",
@@ -141,6 +170,7 @@ def _poll(
         state = status.get("state")
 
         if state == "done":
+
             urls = status.get("resultUrl")
 
             url = (
@@ -173,12 +203,18 @@ def _poll(
                 f"Timed out waiting for PaddleOCR job {job_id}."
             )
 
-        time.sleep(min(interval, remaining))
+        time.sleep(
+            min(interval, remaining)
+        )
 
-        interval = min(interval * 1.5, 15.0)
+        interval = min(
+            interval * 1.5,
+            15.0,
+        )
 
 
 def _submit_attempts() -> int:
+
     raw = os.getenv(
         "PADDLEOCR_SUBMIT_MAX_ATTEMPTS",
         "2",
@@ -205,8 +241,7 @@ def _submit_attempts() -> int:
 def _submission_error_kind(
     error: BaseException,
 ) -> str:
-    # Only a direct ConnectTimeout is eligible
-    # for automatic retry.
+
     if isinstance(
         error,
         requests.exceptions.ConnectTimeout,
@@ -220,6 +255,7 @@ def _submission_error_kind(
     read_timeout = False
 
     while pending:
+
         item = pending.pop()
 
         if id(item) in seen:
@@ -270,6 +306,7 @@ def _submit_job(
     headers,
     timeout,
 ) -> str:
+
     attempts = _submit_attempts()
 
     upload_timeout = client._upload_timeout(
@@ -289,10 +326,8 @@ def _submit_job(
         started = time.monotonic()
 
         logger.info(
-            "paddleocr:submit status=started "
-            "model=%s first_page=%d "
-            "attempt=%d/%d socket_timeout=%.1f "
-            "read_timeout=%.1f",
+            "paddleocr:submit status=started model=%s first_page=%d "
+            "attempt=%d/%d socket_timeout=%.1f read_timeout=%.1f",
             model,
             batch.start_page + 1,
             attempt,
@@ -300,9 +335,7 @@ def _submit_job(
             *upload_timeout,
         )
 
-        # Open the file again on every attempt.
-        # Reusing an exhausted file may upload
-        # an empty or incomplete PDF.
+        # Reopen the file for each safe retry.
         try:
             with batch.path.open("rb") as pdf:
 
@@ -311,9 +344,7 @@ def _submit_job(
                     headers=headers,
                     data={
                         "model": model,
-                        "optionalPayload": json.dumps(
-                            payload
-                        ),
+                        "optionalPayload": json.dumps(payload),
                     },
                     files={
                         "file": (
@@ -323,9 +354,6 @@ def _submit_job(
                         ),
                     },
                     timeout=upload_timeout,
-
-                    # Avoid implicit POST resubmission
-                    # through HTTP 307/308 redirects.
                     allow_redirects=False,
                 )
 
@@ -348,10 +376,8 @@ def _submit_job(
             )
 
             logger.warning(
-                "paddleocr:submit status=failed "
-                "kind=%s outcome=%s retry=%s "
-                "attempt=%d/%d first_page=%d "
-                "elapsed=%.2f error_type=%s",
+                "paddleocr:submit status=failed kind=%s outcome=%s retry=%s "
+                "attempt=%d/%d first_page=%d elapsed=%.2f error_type=%s",
                 kind,
                 outcome,
                 can_retry,
@@ -363,13 +389,13 @@ def _submit_job(
             )
 
             if can_retry:
+
                 delay = float(
                     2 ** (attempt - 1)
                 )
 
                 logger.info(
-                    "paddleocr:submit "
-                    "status=backoff delay=%.1f",
+                    "paddleocr:submit status=backoff delay=%.1f",
                     delay,
                 )
 
@@ -378,12 +404,14 @@ def _submit_job(
                 continue
 
             if kind == "connect_timeout":
-                raise client.PaddleOCRTimeoutError(
+
+                raise UnconnectedSubmissionError(
                     "PaddleOCR connection timed out "
                     "during PDF upload."
                 ) from exc
 
             if kind.endswith("timeout"):
+
                 raise client.PaddleOCRTimeoutError(
                     f"PaddleOCR PDF upload {kind}; "
                     "submission outcome unknown. "
@@ -403,8 +431,7 @@ def _submit_job(
             and 300 <= status < 400
         ):
             logger.warning(
-                "paddleocr:submit "
-                "status=redirect_blocked "
+                "paddleocr:submit status=redirect_blocked "
                 "http=%d retry=False",
                 status,
             )
@@ -415,9 +442,9 @@ def _submit_job(
             )
 
         if not response.ok:
+
             logger.warning(
-                "paddleocr:submit "
-                "status=http_error "
+                "paddleocr:submit status=http_error "
                 "http=%s retry=False",
                 status,
             )
@@ -431,6 +458,7 @@ def _submit_job(
             data = response.json()
 
         except ValueError as exc:
+
             logger.warning(
                 "paddleocr:submit status=invalid_json "
                 "outcome=unknown retry=False"
@@ -484,14 +512,110 @@ def _process_batch(
     poll_timeout,
     recovery,
     result_timeout,
+    journal=None,
 ):
-    job_id = _submit_job(
-        batch,
-        model=model,
-        job_url=job_url,
-        headers=headers,
-        timeout=timeout,
-    )
+
+    key = None
+    record = None
+
+    if journal is not None:
+
+        # Validate local submission configuration
+        # before creating a durable reservation.
+        _submit_attempts()
+
+        client._upload_timeout(
+            timeout[1]
+        )
+
+        key = journal.batch_key(
+            batch.start_page,
+            batch.page_count,
+            model,
+        )
+
+        reservation = journal.reserve(key)
+
+        record = reservation.record
+
+        if reservation.created:
+
+            try:
+                job_id = _submit_job(
+                    batch,
+                    model=model,
+                    job_url=job_url,
+                    headers=headers,
+                    timeout=timeout,
+                )
+
+            except UnconnectedSubmissionError:
+
+                journal.release_unconnected(
+                    key,
+                    record.claim_id,
+                )
+
+                raise
+
+            # Persist the provider Job ID before polling.
+            # Never release the reservation if saving fails.
+            try:
+                journal.accept(
+                    key,
+                    record.claim_id,
+                    job_id,
+                )
+
+            except Exception:
+
+                logger.error(
+                    "paddleocr:journal "
+                    "status=accept_failed job=%s",
+                    job_id,
+                )
+
+                raise
+
+            logger.info(
+                "paddleocr:journal status=accepted job=%s",
+                job_id,
+            )
+
+        elif record.state == "submitting":
+
+            raise JournalStateError(
+                "Previous OCR submission is unconfirmed; "
+                "automatic resubmission disabled."
+            )
+
+        elif record.state == "failed":
+
+            raise client.PaddleOCRJobFailedError(
+                f"PaddleOCR job {record.job_id} previously failed."
+            )
+
+        else:
+
+            job_id = record.job_id
+
+            logger.info(
+                "paddleocr:journal status=resumed "
+                "state=%s job=%s",
+                record.state,
+                job_id,
+            )
+
+    else:
+
+        # Preserve compatibility with legacy callers.
+        job_id = _submit_job(
+            batch,
+            model=model,
+            job_url=job_url,
+            headers=headers,
+            timeout=timeout,
+        )
 
     logger.info(
         "paddleocr:upload status=completed "
@@ -505,22 +629,42 @@ def _process_batch(
         min(timeout[1], 30.0),
     )
 
-    url = _with_recovery(
-        lambda deadline: _poll(
-            job_url,
-            job_id,
-            headers,
-            status_timeout,
-            deadline,
-        ),
-        job_id=job_id,
-        stage="poll",
-        seconds=poll_timeout,
-        recovery=recovery,
-    )
+    try:
+        url = _with_recovery(
+            lambda deadline: _poll(
+                job_url,
+                job_id,
+                headers,
+                status_timeout,
+                deadline,
+            ),
+            job_id=job_id,
+            stage="poll",
+            seconds=poll_timeout,
+            recovery=recovery,
+        )
 
-    # Never send the provider's Bearer token
-    # to the result URL.
+    except client.PaddleOCRJobFailedError:
+
+        if journal is not None:
+
+            if record.state == "completed":
+
+                raise JournalStateError(
+                    "Previously completed OCR job "
+                    "is no longer available."
+                )
+
+            journal.finish(
+                key,
+                record.claim_id,
+                failed=True,
+            )
+
+        raise
+
+    # Never forward the provider's Bearer token
+    # to the result download URL.
     response = _with_recovery(
         lambda deadline: client._get_with_retries(
             url,
@@ -546,11 +690,27 @@ def _process_batch(
         model,
     )
 
-    # Preserve actual metadata returned by PaddleOCR.
     _log_geometry(
         pages,
         job_id,
     )
+
+    if journal is not None:
+
+        # A malformed or incomplete response must not
+        # mark the batch as completed.
+        if len(pages) != batch.page_count:
+
+            raise RuntimeError(
+                f"OCR page mismatch: "
+                f"expected {batch.page_count}, "
+                f"got {len(pages)}."
+            )
+
+        journal.finish(
+            key,
+            record.claim_id,
+        )
 
     return job_id, pages, info
 
@@ -558,7 +718,18 @@ def _process_batch(
 def recognize_pdf(
     path: str,
     model: str,
+    *,
+    user_id: str | None = None,
+    filename: str | None = None,
+    journal_path: Path = DEFAULT_PATH,
 ) -> tuple[str, dict[str, Any]]:
+
+    if (user_id is None) != (filename is None):
+
+        raise ValueError(
+            "OCR journal requires both user_id and filename."
+        )
+
     token = os.getenv(
         "PADDLEOCR_ACCESS_TOKEN"
     )
@@ -597,6 +768,7 @@ def recognize_pdf(
     )
 
     if recovery > 300:
+
         raise ValueError(
             "PADDLEOCR_RECOVERY_TIMEOUT "
             "must not exceed 300 seconds."
@@ -613,12 +785,11 @@ def recognize_pdf(
         client._positive_number(
             "PADDLEOCR_MAX_UPLOAD_MB",
             "1.5",
-        )
-        * 1024
-        * 1024
+        ) * 1024 * 1024
     )
 
     if max_pages < 1 or max_bytes < 1:
+
         raise ValueError(
             "Invalid OCR batch size."
         )
@@ -629,6 +800,7 @@ def recognize_pdf(
     ).strip()
 
     if alternate not in {"", "PP-OCRv6"}:
+
         raise ValueError(
             "PADDLEOCR_EMPTY_TEXT_FALLBACK_MODEL "
             "must be PP-OCRv6 or empty."
@@ -648,7 +820,7 @@ def recognize_pdf(
     data_info = {}
 
     with tempfile.TemporaryDirectory(
-        prefix="quizpdf-ocr-"
+        prefix="quizpdf-ocr-",
     ) as directory:
 
         workdir = Path(directory)
@@ -667,10 +839,96 @@ def recognize_pdf(
             max_bytes=max_bytes,
         )
 
+        journal = None
+
+        if user_id is not None:
+
+            if not batches or any(
+                batch.page_count is None
+                for batch in batches
+            ):
+
+                raise ValueError(
+                    "Cannot journal an unknown PDF batch layout."
+                )
+
+            # Only reuse jobs when the OCR plan matches.
+            # The raw credential is never stored.
+            plan = {
+                "version": 1,
+
+                "job_url": job_url,
+
+                "credential_sha256":
+                    hashlib.sha256(
+                        token.encode()
+                    ).hexdigest(),
+
+                "pymupdf": pymupdf.VersionBind,
+
+                "vector_dpi": os.getenv(
+                    "PADDLEOCR_VECTOR_DPI",
+                    "220",
+                ),
+
+                "vector_quality": os.getenv(
+                    "PADDLEOCR_VECTOR_JPEG_QUALITY",
+                    "88",
+                ),
+
+                "max_pages": max_pages,
+
+                "max_bytes": max_bytes,
+
+                "rasterized_pages": converted,
+
+                "batches": [
+                    [
+                        batch.start_page,
+                        batch.page_count,
+                    ]
+                    for batch in batches
+                ],
+
+                "options": _optional_payload(model),
+
+                "alternate": alternate,
+
+                "alternate_options":
+                    _optional_payload(alternate),
+            }
+
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    plan,
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+
+            scope = upload_scope(
+                user_id=user_id,
+
+                filename=filename,
+
+                source_sha256=hashlib.sha256(
+                    Path(path).read_bytes()
+                ).hexdigest(),
+
+                model=model,
+
+                plan_fingerprint=fingerprint,
+            )
+
+            journal = OCRJobJournal(
+                scope,
+                journal_path,
+            )
+
         for index, batch in enumerate(
             batches,
             1,
         ):
+
             logger.info(
                 "paddleocr:batch status=started "
                 "index=%d total=%d first_page=%d",
@@ -680,6 +938,7 @@ def recognize_pdf(
             )
 
             def run(selected_model):
+
                 return _process_batch(
                     batch,
                     model=selected_model,
@@ -689,13 +948,16 @@ def recognize_pdf(
                     poll_timeout=poll_timeout,
                     recovery=recovery,
                     result_timeout=result_timeout,
+                    journal=journal,
                 )
 
             def check_count(pages):
+
                 if (
                     batch.page_count is not None
                     and len(pages) != batch.page_count
                 ):
+
                     raise RuntimeError(
                         f"OCR page mismatch for batch {index}: "
                         f"expected {batch.page_count}, "
@@ -715,6 +977,7 @@ def recognize_pdf(
                 ]
 
             except client.PaddleOCRJobFailedError:
+
                 if (
                     model != "PaddleOCR-VL-1.6"
                     or not alternate
@@ -758,6 +1021,7 @@ def recognize_pdf(
                     or missing_vector
                 )
             ):
+
                 other_job, other_pages, other_info = (
                     run(alternate)
                 )
@@ -765,15 +1029,17 @@ def recognize_pdf(
                 check_count(other_pages)
 
                 if len(other_pages) != len(pages):
+
                     raise RuntimeError(
-                        "Fallback OCR returned "
-                        "mismatched page count."
+                        "Fallback OCR returned mismatched page count."
                     )
 
                 for offset in missing:
+
                     if client._text_from(
                         other_pages[offset]
                     ):
+
                         pages[offset] = (
                             other_pages[offset]
                         )
@@ -786,7 +1052,9 @@ def recognize_pdf(
                 })
 
             if len(batches) > 1:
+
                 for offset, page in enumerate(pages):
+
                     page["source_page_number"] = (
                         batch.start_page + offset + 1
                     )
@@ -815,6 +1083,7 @@ def recognize_pdf(
     }
 
     if len(jobs) > 1:
+
         raw["job_ids"] = [
             item["jobs"][-1]["job_id"]
             for item in jobs
@@ -823,9 +1092,11 @@ def recognize_pdf(
         raw["batches"] = jobs
 
     elif len(jobs[0]["jobs"]) > 1:
+
         raw["batches"] = jobs
 
     if converted:
+
         raw["rasterized_pages"] = converted
 
     texts = client.extract_page_texts(raw)
@@ -834,6 +1105,7 @@ def recognize_pdf(
         text.strip()
         for text in texts
     ):
+
         raise client.PaddleOCRNoTextError(
             "PaddleOCR returned no recognizable text."
         )
