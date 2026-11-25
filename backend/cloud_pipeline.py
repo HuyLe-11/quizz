@@ -26,6 +26,9 @@ try:
 
     from backend.engine.pdf_tools import crop_question_pdf
 
+    from backend.engine.registered_ocr_context import capture_registered_pages
+    from backend.engine.registered_mark_snapshot import collect_registered_marks
+
     from backend.engine.parser_review_snapshot import (
         build_parser_review_snapshot,
     )
@@ -55,6 +58,9 @@ except ModuleNotFoundError as exc:
     )
 
     from engine.pdf_tools import crop_question_pdf
+
+    from engine.registered_ocr_context import capture_registered_pages
+    from engine.registered_mark_snapshot import collect_registered_marks
 
     from engine.parser_review_snapshot import (
         build_parser_review_snapshot,
@@ -295,7 +301,7 @@ def process_cloud_pdf(
 
         with tempfile.TemporaryDirectory(
             prefix="quizpdf-cloud-"
-        ) as temporary:
+        ) as temporary, capture_registered_pages() as capture:
             work_directory = Path(temporary)
 
             pdf_path = (
@@ -392,6 +398,14 @@ def process_cloud_pdf(
                     crop_images=crop_images,
                 )
 
+            with PDF_LOCK:
+                registered_marks = collect_registered_marks(
+                    pdf_path,
+                    normalized_pages,
+                    questions,
+                    capture,
+                )
+
         exam = {
             "id": exam_id,
             "name": name,
@@ -417,6 +431,7 @@ def process_cloud_pdf(
                 "ocr_response": raw_response,
                 "parser_pipeline_version":
                     PARSER_PIPELINE_VERSION,
+                "registered_marks": registered_marks,
                 "parser_review":
                     build_parser_review_snapshot(
                         questions
