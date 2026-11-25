@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -151,14 +152,25 @@ def _exam_ocr_pages(exam: dict) -> list:
 def _question_response(question: dict) -> dict:
     detection = question.get("red_mark_detection")
     asset = question.get("asset")
+    question_text = _json_blocks(question["question_content"])
+    # Older uploads may contain a synthetic Q1 record whose entire prompt is the
+    # Roman-numeral section instruction. Expose it as an empty reviewable MCP
+    # placeholder backed by its existing crop, rather than showing the section as
+    # a fill-in question. New uploads are produced correctly by quiz_parser.
+    legacy_section_stub = (
+        question.get("question_id") == 1
+        and question.get("type") == "fill_in"
+        and not question.get("mcp_options")
+        and re.match(r"^\s*(?:#{1,6}\s*)?QUESTION\s+I\b", question_text, re.I)
+    )
     return {
         "question_id": question["question_id"],
         "question_record_id": question["id"],
         "has_source_pdf": bool(question.get("has_source_pdf")),
         "pdf_question_number": question.get("source_question_number", question["question_id"]),
-        "type": question["type"],
+        "type": "mcp" if legacy_section_stub else question["type"],
         "multiple_choice": bool(question["multiple_choice"]),
-        "question": _json_blocks(question["question_content"]),
+        "question": "" if legacy_section_stub else question_text,
         "options": [
             {"label": option["label"], "content": _json_blocks(option["content"])}
             for option in question["mcp_options"]
@@ -405,9 +417,6 @@ def detect_question_red_mark(question_record_id: str, force: bool = False):
     if not pdf_path or not Path(pdf_path).is_file():
         raise HTTPException(409, "Bản ghi này không có PDF gốc để nhận diện dấu đỏ.")
     labels = [option["label"] for option in question["mcp_options"]]
-    if not labels:
-        raise HTTPException(422, "Câu hỏi này chưa có các lựa chọn để đối chiếu dấu đỏ.")
-
     config = RedMarkConfig.from_environment()
     cached = question.get("red_mark_detection")
     if not force and cached and cached["config_fingerprint"] == config.fingerprint:
