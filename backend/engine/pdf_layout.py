@@ -768,7 +768,12 @@ def locate(
     number: int,
     page_ocr: dict | None = None,
 ) -> dict | None:
-    return (
+    from .option_geometry import (
+        native_marker_geometry,
+        recognition_marker_geometry,
+    )
+
+    located = (
         locate_in_lines(
             page,
             number,
@@ -782,6 +787,86 @@ def locate(
             "paddleocr",
         )
     )
+    if located is None:
+        return None
+
+    located["option_anchors"] = {}
+    located["option_anchor_source"] = "none"
+
+    region = located["bbox"]
+
+    if located["source"] == "pymupdf":
+
+        geometry = native_marker_geometry(
+            page,
+            region,
+        )
+
+    elif (
+        located["source"] == "paddleocr"
+        and isinstance(page_ocr, dict)
+    ):
+
+        representations = []
+
+        for node, dimensions in _sources(page_ocr):
+
+            if dimensions is None:
+                continue
+
+            texts = node.get("rec_texts")
+
+            if not isinstance(texts, list):
+                continue
+
+            # Recognition geometry only.
+            # Never promote entire layout blocks.
+
+            for key in ("rec_boxes", "rec_polys"):
+
+                rects = node.get(key)
+
+                if (
+                    not isinstance(rects, list)
+                    or len(rects) != len(texts)
+                ):
+                    continue
+
+                representations.append(
+                    _scale_items(
+                        page,
+                        [
+                            (text, bbox(rect))
+                            for text, rect in zip(
+                                texts,
+                                rects,
+                            )
+                        ],
+                        dimensions,
+                    )
+                )
+
+        geometry = recognition_marker_geometry(
+            representations,
+            region,
+        )
+
+    else:
+
+        # Inferred question boundaries
+        # are not exact evidence.
+
+        return located
+
+    located["option_anchors"] = geometry.anchors
+
+    if geometry.anchors:
+
+        located["option_anchor_source"] = (
+            geometry.source
+        )
+
+    return located
 
 
 def question_segments(
