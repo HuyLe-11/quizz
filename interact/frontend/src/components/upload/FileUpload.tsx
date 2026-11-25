@@ -9,45 +9,67 @@ import type {
   DragEvent,
 } from "react";
 
-import { useNavigate } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+} from "react-router-dom";
+
+import { useAuth } from "../../contexts/AuthContext";
 
 import {
   createUploadJob,
-  isActiveUploadJob,
-  waitForUploadJob,
-  uploadPdf,
-  usesUploadJobs,
+  getUploadJob,
 } from "../../services/api";
+
+import {
+  clearUploadTracking,
+  followUploadJob,
+  isTerminalUploadJob,
+  readUploadTracking,
+  saveUploadTracking,
+  validateUploadJob,
+} from "../../services/uploadTracking";
+
+import type {
+  UploadTracking,
+} from "../../services/uploadTracking";
 
 import type {
   UploadJob,
   UploadJobPhase,
 } from "../../types/types";
 
+
 const MAX_FILE_SIZE = 30 * 1024 * 1024;
 
-const PROCESSING_STEPS = [
+
+const STEPS = [
   {
     phase: "uploading",
     label: "Tiếp nhận tệp PDF",
   },
   {
     phase: "ocr",
-    label: "Nhận diện nội dung bằng PaddleOCR",
+    label: "Nhận diện bằng PaddleOCR",
   },
   {
     phase: "question_extraction",
     label: "Phân tích câu hỏi",
   },
   {
+    phase: "source_pdf_save",
+    label: "Lưu PDF gốc",
+  },
+  {
     phase: "question_crops",
     label: "Xử lý ảnh câu hỏi",
   },
   {
-    phase: "cloud_save",
+    phase: "sqlite_save",
     label: "Lưu đề thi",
   },
 ] as const;
+
 
 const PHASE_LABELS: Record<UploadJobPhase, string> = {
   queued: "Đang chờ đến lượt xử lý",
@@ -61,715 +83,992 @@ const PHASE_LABELS: Record<UploadJobPhase, string> = {
   completed: "Đã hoàn thành",
 };
 
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
 
+const PRIMARY =
+    "w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 font-medium text-white disabled:opacity-60";
+
+const SECONDARY =
+    "rounded-md border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]";
+
+
+type PollState =
+    | {
+  kind: "checking";
+}
+    | {
+  kind: "retrying";
+  count: number;
+  delayMs: number;
+}
+    | {
+  kind: "paused";
+  message: string;
+}
+    | {
+  kind: "done";
+};
+
+
+function initialTracking(ownerId: string) {
+  try {
+    return {
+      record: readUploadTracking(
+          window.sessionStorage,
+          ownerId,
+      ),
+      blocked: false,
+    };
+  } catch {
+    return {
+      record: null,
+      blocked: true,
+    };
+  }
+}
+
+
+function formatSize(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;
   }
 
-  if (bytes < 1024 * 1024) {
+  if (bytes < 1024 ** 2) {
     return `${(bytes / 1024).toFixed(2)} KB`;
   }
 
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
 }
+
 
 function formatElapsed(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-
-  const remainingSeconds = seconds % 60;
-
-  return (
-      String(minutes).padStart(2, "0") +
-      ":" +
-      String(remainingSeconds).padStart(2, "0")
-  );
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function getCompletedSteps(
+
+function completedSteps(
     job: UploadJob | null,
 ): number {
   if (!job) return 0;
 
   if (job.status === "completed") {
-    return PROCESSING_STEPS.length;
+    return STEPS.length;
   }
 
-  if (
-      job.phase === "queued" ||
-      job.phase === "starting"
-  ) {
-    return 1;
-  }
-
-  const phase = job.phase === "sqlite_save"
-      ? "cloud_save"
-      : job.phase === "source_pdf_save"
-          ? "question_crops"
+  // Both persistence backends share the same UI stage.
+  const phase =
+      job.phase === "cloud_save"
+          ? "sqlite_save"
           : job.phase;
 
-  const index = PROCESSING_STEPS.findIndex(
-      (step) => step.phase === phase,
-  );
-
-  return Math.max(1, index);
-}
-
-function Spinner({
-                   className = "",
-                 }: {
-  className?: string;
-}) {
-  return (
-      <svg
-          className={`animate-spin h-4 w-4 ${className}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-      >
-        <circle
-            className="opacity-25"
-            cx="12"
-            cy="12"
-            r="10"
-            stroke="currentColor"
-            strokeWidth="4"
-        />
-
-        <path
-            className="opacity-75"
-            fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-        />
-      </svg>
+  return Math.max(
+      1,
+      STEPS.findIndex(
+          step => step.phase === phase,
+      ),
   );
 }
 
-function CheckIcon() {
-  return (
-      <svg
-          className="h-4 w-4 shrink-0"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          aria-hidden="true"
-      >
-        <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="m5 12 4 4L19 6"
-        />
-      </svg>
-  );
-}
 
 export function FileUpload() {
+  const { user } = useAuth();
+
+  return user
+      ? (
+          <UploadPanel
+              key={user.id}
+              ownerId={user.id}
+          />
+      )
+      : null;
+}
+
+
+function UploadPanel({
+                       ownerId,
+                     }: {
+  ownerId: string;
+}) {
+  const [initial] = useState(
+      () => initialTracking(ownerId),
+  );
+
+  const [record, setRecord] =
+      useState<UploadTracking | null>(
+          initial.record,
+      );
+
+  const [storageBlocked, setStorageBlocked] =
+      useState(initial.blocked);
+
+  const [storageWarning, setStorageWarning] =
+      useState<string | null>(null);
+
   const [file, setFile] =
       useState<File | null>(null);
 
-  const [isDragging, setIsDragging] =
-      useState(false);
-
-  const [isUploading, setIsUploading] =
-      useState(false);
-
   const [model, setModel] =
-      useState("PaddleOCR-VL-1.6");
+      useState(
+          initial.record?.model ??
+          "PaddleOCR-VL-1.6",
+      );
 
-  const [error, setError] =
-      useState<string | null>(null);
+  const [dragging, setDragging] =
+      useState(false);
+
+  const [submitting, setSubmitting] =
+      useState(false);
 
   const [job, setJob] =
       useState<UploadJob | null>(null);
 
-  const [startedAt, setStartedAt] =
-      useState<number | null>(null);
+  const [poll, setPoll] =
+      useState<PollState>({
+        kind: "checking",
+      });
+
+  const [revision, setRevision] =
+      useState(0);
+
+  const [error, setError] =
+      useState<string | null>(null);
 
   const [elapsed, setElapsed] =
       useState(0);
 
-  const fileInputRef =
+  const inputRef =
       useRef<HTMLInputElement>(null);
 
-  const requestRef =
+  const submitRef =
       useRef<AbortController | null>(null);
 
   const navigate = useNavigate();
 
-  const hasActiveJob = isActiveUploadJob(job);
+  const jobId =
+      record?.jobId ?? null;
 
-  const completedSteps = getCompletedSteps(job);
+  const startedAt =
+      record?.startedAt ?? null;
 
-  const totalSteps = PROCESSING_STEPS.length;
+  const terminal =
+      isTerminalUploadJob(job);
 
-  const progress =
-      (completedSteps / totalSteps) * 100;
+  const following =
+      jobId !== null &&
+      !terminal &&
+      poll.kind !== "paused";
 
-  // Stop frontend requests when the component unmounts.
-  // This does not cancel the backend processing job.
+  const busy =
+      submitting || following;
+
+  const completed =
+      completedSteps(job);
+
+
+  useEffect(
+      () => () => submitRef.current?.abort(),
+      [],
+  );
+
+
+  // Reconnect to the saved job instead of submitting again.
   useEffect(() => {
-    return () => {
-      requestRef.current?.abort();
-    };
-  }, []);
+    if (!jobId) return;
 
-  // Track elapsed waiting time, independently of job progress.
+    const controller =
+        new AbortController();
+
+    const signal =
+        controller.signal;
+
+    void followUploadJob({
+      jobId,
+      signal,
+      getJob: getUploadJob,
+
+      onUpdate: (updated) => {
+        if (signal.aborted) return;
+
+        setJob(updated);
+
+        setPoll({
+          kind:
+              isTerminalUploadJob(updated)
+                  ? "done"
+                  : "checking",
+        });
+      },
+
+      onRetry: (count, delayMs) => {
+        if (!signal.aborted) {
+          setPoll({
+            kind: "retrying",
+            count,
+            delayMs,
+          });
+        }
+      },
+    }).catch((cause: unknown) => {
+      if (signal.aborted) return;
+
+      setPoll({
+        kind: "paused",
+
+        message:
+            cause instanceof Error
+                ? cause.message
+                : "Không thể đọc trạng thái tác vụ.",
+      });
+    });
+
+    return () => controller.abort();
+
+  }, [jobId, revision]);
+
+
   useEffect(() => {
     if (
-        !isUploading ||
-        startedAt === null
+        startedAt === null ||
+        terminal
     ) {
       return;
     }
 
     const timer = window.setInterval(() => {
       setElapsed(
-          Math.floor(
-              (Date.now() - startedAt) / 1000,
+          Math.max(
+              0,
+              Math.floor(
+                  (Date.now() - startedAt) / 1000,
+              ),
           ),
       );
     }, 1000);
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [isUploading, startedAt]);
+    return () =>
+        window.clearInterval(timer);
 
-  const validateAndSetFile = (
-      selectedFile: File | undefined,
-  ) => {
-    if (!selectedFile) return;
+  }, [startedAt, terminal]);
 
-    const isPdf =
-        selectedFile.type === "application/pdf" ||
-        selectedFile.name.toLowerCase().endsWith(".pdf");
 
-    if (!isPdf) {
-      setError("Vui lòng chọn tệp PDF.");
-      return;
-    }
-
-    if (selectedFile.size === 0) {
-      setError("Tệp PDF không có nội dung.");
-      return;
-    }
-
-    if (selectedFile.size > MAX_FILE_SIZE) {
-      setError(
-          "Dung lượng PDF không được vượt quá 30 MB.",
-      );
-
-      return;
-    }
-
-    setFile(selectedFile);
-    setError(null);
-    setJob(null);
-    setElapsed(0);
-    setStartedAt(null);
-  };
-
-  const handleDragOver = (
-      event: DragEvent<HTMLDivElement>,
-  ) => {
-    event.preventDefault();
-
-    if (!isUploading) {
-      setIsDragging(true);
-    }
-  };
-
-  const handleDragLeave = (
-      event: DragEvent<HTMLDivElement>,
-  ) => {
-    event.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (
-      event: DragEvent<HTMLDivElement>,
-  ) => {
-    event.preventDefault();
-    setIsDragging(false);
-
+  function chooseFile(
+      selected?: File,
+  ) {
     if (
-        isUploading ||
-        hasActiveJob
+        !selected ||
+        record ||
+        storageBlocked ||
+        submitRef.current
     ) {
       return;
     }
 
-    validateAndSetFile(
+    if (
+        selected.type !== "application/pdf" &&
+        !selected.name.toLowerCase().endsWith(".pdf")
+    ) {
+      setError(
+          "Vui lòng chọn tệp PDF.",
+      );
+      return;
+    }
+
+    if (
+        !selected.size ||
+        selected.size > MAX_FILE_SIZE
+    ) {
+      setError(
+          "PDF phải có nội dung và không vượt quá 30 MB.",
+      );
+      return;
+    }
+
+    setFile(selected);
+    setError(null);
+  }
+
+
+  function handleDrop(
+      event: DragEvent<HTMLDivElement>,
+  ) {
+    event.preventDefault();
+    setDragging(false);
+
+    chooseFile(
         event.dataTransfer.files[0],
     );
-  };
+  }
 
-  const handleFileChange = (
+
+  function handleFileChange(
       event: ChangeEvent<HTMLInputElement>,
-  ) => {
-    validateAndSetFile(
+  ) {
+    chooseFile(
         event.target.files?.[0],
     );
 
     event.target.value = "";
-  };
+  }
 
-  const handleRemoveFile = () => {
-    if (isUploading) return;
 
-    setFile(null);
-    setJob(null);
-    setError(null);
-    setElapsed(0);
-    setStartedAt(null);
-  };
-
-  const handleUpload = async () => {
+  async function handleUpload() {
     if (
         !file ||
-        requestRef.current !== null
+        record ||
+        storageBlocked ||
+        submitRef.current
     ) {
+      return;
+    }
+
+    const pending: UploadTracking = {
+      jobId: null,
+      fileName: file.name,
+      fileSize: file.size,
+      model,
+      startedAt: Date.now(),
+    };
+
+    // Persist before POST to prevent silent resubmission.
+    try {
+      saveUploadTracking(
+          window.sessionStorage,
+          ownerId,
+          pending,
+      );
+    } catch {
+      setStorageWarning(
+          "Không thể lưu phiên theo dõi. " +
+          "Chưa gửi PDF; hãy kiểm tra cài đặt " +
+          "lưu trữ của trình duyệt.",
+      );
       return;
     }
 
     const controller =
         new AbortController();
 
-    requestRef.current = controller;
+    submitRef.current = controller;
 
-    setIsUploading(true);
+    setRecord(pending);
+    setSubmitting(true);
+    setElapsed(0);
     setError(null);
+    setStorageWarning(null);
+    setJob(null);
 
-    // Resume an existing job after a temporary connection error.
-    const existingJob =
-        job && isActiveUploadJob(job)
-            ? job
-            : null;
-
-    const startTime =
-        existingJob && startedAt !== null
-            ? startedAt
-            : Date.now();
-
-    setStartedAt(startTime);
-
-    setElapsed(
-        Math.floor(
-            (Date.now() - startTime) / 1000,
-        ),
-    );
+    setPoll({
+      kind: "checking",
+    });
 
     try {
-      if (!usesUploadJobs()) {
-        const result = await uploadPdf(
-            file,
-            model,
-            controller.signal,
-        );
-
-        controller.signal.throwIfAborted();
-
-        navigate(
-            `/quiz/${encodeURIComponent(result.exam_id)}`,
-        );
-
-        return;
-      }
-
-      let currentJob: UploadJob;
-
-      if (existingJob) {
-        currentJob = existingJob;
-      } else {
-        setJob(null);
-
-        currentJob = await createUploadJob(
-            file,
-            model,
-            controller.signal,
-        );
-      }
+      const created =
+          await createUploadJob(
+              file,
+              model,
+              controller.signal,
+          );
 
       controller.signal.throwIfAborted();
 
-      setJob(currentJob);
+      validateUploadJob(created);
 
-      const result = await waitForUploadJob(
-          currentJob,
-          (updatedJob) => {
-            if (!controller.signal.aborted) {
-              setJob(updatedJob);
-            }
-          },
-          controller.signal,
-      );
+      const tracked = {
+        ...pending,
+        jobId: created.job_id,
+      };
 
-      controller.signal.throwIfAborted();
+      try {
+        saveUploadTracking(
+            window.sessionStorage,
+            ownerId,
+            tracked,
+        );
+      } catch {
+        setStorageWarning(
+            "Đã nhận Job ID nhưng không lưu được " +
+            "vào trình duyệt. Không nên refresh " +
+            "trước khi hoàn thành.",
+        );
+      }
 
-      navigate(
-          `/quiz/${encodeURIComponent(result.exam_id)}`,
-      );
-    } catch (requestError) {
+      setRecord(tracked);
+      setJob(created);
+      setFile(null);
+
+    } catch (cause) {
       if (!controller.signal.aborted) {
         setError(
-            requestError instanceof Error
-                ? requestError.message
-                : "Không thể xử lý tệp PDF.",
+            cause instanceof Error
+                ? cause.message
+                : "Không nhận được mã tác vụ.",
         );
       }
+
     } finally {
       if (
-          requestRef.current === controller
+          submitRef.current === controller
       ) {
-        requestRef.current = null;
+        submitRef.current = null;
       }
 
       if (!controller.signal.aborted) {
-        setElapsed(
-            Math.floor(
-                (Date.now() - startTime) / 1000,
-            ),
-        );
-
-        setIsUploading(false);
+        setSubmitting(false);
       }
     }
-  };
+  }
 
-  const phaseLabel = !job
-      ? (usesUploadJobs()
-          ? "Đang tải tệp PDF lên máy chủ"
-          : "Đang xử lý PDF (không có tiến độ từng giai đoạn)")
-      : PHASE_LABELS[job.phase] ||
-      "Đang xử lý tài liệu";
 
-  const progressLabel =
-      job?.status === "failed"
-          ? `Xử lý thất bại — ${phaseLabel}`
-          : !isUploading && hasActiveJob
-              ? "Đã tạm dừng theo dõi tác vụ"
-              : phaseLabel;
+  function resume() {
+    if (
+        !jobId ||
+        busy ||
+        terminal
+    ) {
+      return;
+    }
+
+    setPoll({
+      kind: "checking",
+    });
+
+    setRevision(
+        value => value + 1,
+    );
+  }
+
+
+  function resetTracking(
+      confirmUnknown = true,
+  ): boolean {
+    if (
+        busy ||
+        submitRef.current
+    ) {
+      return false;
+    }
+
+    if (
+        confirmUnknown &&
+        !terminal &&
+        (record || storageBlocked)
+    ) {
+      if (
+          !window.confirm(
+              "Bạn đã kiểm tra Lịch sử PDF chưa? " +
+              "Xóa theo dõi không hủy tác vụ backend. " +
+              "Tải lại PDF có thể tạo tác vụ trùng.",
+          )
+      ) {
+        return false;
+      }
+    }
+
+    try {
+      clearUploadTracking(
+          window.sessionStorage,
+          ownerId,
+      );
+    } catch {
+      setStorageWarning(
+          "Không thể xóa bản ghi theo dõi " +
+          "trong trình duyệt.",
+      );
+      return false;
+    }
+
+    setRecord(null);
+    setFile(null);
+    setJob(null);
+    setStorageBlocked(false);
+    setStorageWarning(null);
+    setError(null);
+
+    setPoll({
+      kind: "checking",
+    });
+
+    setElapsed(0);
+
+    return true;
+  }
+
+
+  function openExam() {
+    const examId =
+        job?.status === "completed"
+            ? job.result?.exam_id
+            : null;
+
+    if (
+        examId &&
+        resetTracking(false)
+    ) {
+      navigate(
+          `/quiz/${encodeURIComponent(examId)}`,
+      );
+    }
+  }
+
+
+  const label =
+      submitting
+          ? "Đang gửi PDF đến máy chủ"
+          : !jobId
+              ? "Chưa xác định được mã tác vụ"
+              : job?.status === "completed"
+                  ? "Đã hoàn thành"
+                  : job?.status === "failed"
+                      ? "Xử lý thất bại"
+                      : poll.kind === "retrying"
+                          ? `Mất kết nối tạm thời — thử lại sau ${poll.delayMs / 1000}s`
+                          : poll.kind === "paused"
+                              ? "Đã tạm dừng theo dõi"
+                              : job
+                                  ? PHASE_LABELS[job.phase] ?? "Đang xử lý"
+                                  : "Đang kết nối lại với tác vụ";
+
 
   return (
-      <div className="w-full max-w-2xl mx-auto">
-        {!file ? (
-            <div
-                className={`relative border-2 border-dashed rounded-xl p-12 text-center transition-colors cursor-pointer ${
-                    isDragging
-                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]"
-                        : "border-[var(--color-border-strong)] hover:border-[var(--color-primary)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)]"
-                }`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                onClick={() =>
-                    fileInputRef.current?.click()
-                }
-                onKeyDown={(event) => {
-                  if (
-                      event.key === "Enter" ||
-                      event.key === " "
-                  ) {
-                    event.preventDefault();
-                    fileInputRef.current?.click();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                aria-label="Chọn tệp PDF"
-            >
-              <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept=".pdf,application/pdf"
-                  className="hidden"
-              />
+      <div className="mx-auto w-full max-w-2xl">
 
-              <svg
-                  className="mx-auto h-12 w-12 text-[var(--color-text-muted)] mb-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth="2"
+        {storageBlocked ? (
+
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
+
+              <p role="alert">
+                Không đọc được phiên theo dõi PDF đã lưu.
+              </p>
+
+              <Link
+                  to="/history"
+                  className="mt-3 block text-[var(--color-primary)]"
               >
-                <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                />
-              </svg>
-
-              <h3 className="mt-2 text-lg font-semibold text-[var(--color-text)]">
-                Tải tệp PDF lên
-              </h3>
-
-              <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-                Kéo thả tệp vào đây hoặc nhấn để chọn tệp
-              </p>
-
-              <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-                Dung lượng tối đa: 30 MB
-              </p>
-            </div>
-        ) : (
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-xl p-6 shadow-sm">
-              {/* Selected PDF information */}
-
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center space-x-3 min-w-0">
-                  <svg
-                      className="h-8 w-8 shrink-0 text-[var(--color-primary)]"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                  >
-                    <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                    />
-                  </svg>
-
-                  <div className="min-w-0">
-                    <p
-                        className="text-sm font-medium text-[var(--color-text)] truncate"
-                        title={file.name}
-                    >
-                      {file.name}
-                    </p>
-
-                    <p className="text-xs text-[var(--color-text-muted)]">
-                      {formatFileSize(file.size)}
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                    type="button"
-                    onClick={handleRemoveFile}
-                    className="text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors p-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                    disabled={isUploading}
-                    aria-label="Bỏ chọn tệp PDF"
-                >
-                  <svg
-                      className="h-5 w-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                  >
-                    <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M6 18L18 6M6 6l12 12"
-                    />
-                  </svg>
-                </button>
-              </div>
-
-              {/* Submit or resume an upload job */}
+                Kiểm tra lịch sử PDF
+              </Link>
 
               <button
                   type="button"
-                  onClick={handleUpload}
-                  disabled={isUploading}
-                  className="w-full py-2.5 px-4 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-medium rounded-md transition-colors disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  className={`${SECONDARY} mt-3`}
+                  onClick={() => resetTracking()}
               >
-                {isUploading ? (
-                    <>
-                      <Spinner />
-
-                      Đang xử lý...
-                    </>
-                ) : hasActiveJob ? (
-                    "Tiếp tục theo dõi"
-                ) : (
-                    "Tạo bài trắc nghiệm"
-                )}
+                Xóa bản ghi theo dõi
               </button>
+
+            </div>
+
+        ) : !record && !file ? (
+
+            <div
+                className={`rounded-xl border-2 border-dashed p-12 text-center transition-colors ${
+                    dragging
+                        ? "border-[var(--color-primary)] bg-[var(--color-primary-light)]"
+                        : "border-[var(--color-border-strong)] bg-[var(--color-surface)]"
+                }`}
+
+                onDragOver={event => {
+                  event.preventDefault();
+                  setDragging(true);
+                }}
+
+                onDragLeave={() =>
+                    setDragging(false)
+                }
+
+                onDrop={handleDrop}
+            >
+
+              <input
+                  ref={inputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={handleFileChange}
+                  className="hidden"
+              />
+
+              <button
+                  type="button"
+                  onClick={() =>
+                      inputRef.current?.click()
+                  }
+                  className="w-full rounded-md focus-visible:outline-2 focus-visible:outline-[var(--color-primary)]"
+              >
+
+                <svg
+                    className="mx-auto mb-4 h-12 w-12 text-[var(--color-text-muted)]"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    aria-hidden="true"
+                >
+                  <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                  />
+                </svg>
+
+                <span className="block text-lg font-semibold text-[var(--color-text)]">
+                            Tải tệp PDF lên
+                        </span>
+
+                <span className="mt-2 block text-sm text-[var(--color-text-muted)]">
+                            Kéo thả hoặc nhấn để chọn PDF · Tối đa 30 MB
+                        </span>
+
+              </button>
+
+            </div>
+
+        ) : (
+
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-sm">
+
+              {/* File information */}
+
+              <div className="mb-5 flex items-center justify-between gap-3">
+
+                <div className="min-w-0">
+
+                  <p
+                      className="truncate font-medium text-[var(--color-text)]"
+                      title={record?.fileName ?? file?.name}
+                  >
+                    {record?.fileName ?? file?.name}
+                  </p>
+
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    {
+                      formatSize(
+                          record?.fileSize ??
+                          file?.size ??
+                          0,
+                      )
+                    }
+                  </p>
+
+                </div>
+
+                {!record && (
+                    <button
+                        type="button"
+                        className={SECONDARY}
+                        onClick={() => {
+                          setFile(null);
+                          setError(null);
+                        }}
+                    >
+                      Bỏ chọn
+                    </button>
+                )}
+
+              </div>
 
               {/* OCR model selection */}
 
-              <label className="mt-4 block text-left text-sm text-[var(--color-text-secondary)]">
+              <label className="mb-4 block text-sm text-[var(--color-text-secondary)]">
+
                 Mô hình OCR
 
                 <select
-                    value={model}
-                    onChange={(event) =>
+                    value={record?.model ?? model}
+                    disabled={record !== null}
+
+                    onChange={event =>
                         setModel(event.target.value)
                     }
-                    disabled={
-                        isUploading || hasActiveJob
-                    }
+
                     className="mt-1 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[var(--color-text)] disabled:opacity-70"
                 >
+
                   <option value="PaddleOCR-VL-1.6">
-                    PaddleOCR-VL-1.6 · bố cục tài liệu,
-                    công thức và bảng
+                    PaddleOCR-VL-1.6 · bố cục, công thức và bảng
                   </option>
 
                   <option value="PP-OCRv6">
                     PP-OCRv6 · nhận dạng văn bản nhanh
                   </option>
+
                 </select>
+
               </label>
 
-              {/* Processing progress */}
+              {!record ? (
 
-              {(isUploading || job) && (
-                  <div className="mt-6 pt-5 border-t border-[var(--color-border)]">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <h4 className="text-sm font-semibold text-[var(--color-text)]">
+                  <button
+                      type="button"
+                      className={PRIMARY}
+                      onClick={handleUpload}
+                  >
+                    Tạo bài trắc nghiệm
+                  </button>
+
+              ) : (
+
+                  <section
+                      className="border-t border-[var(--color-border)] pt-5"
+                      aria-label="Tiến trình xử lý PDF"
+                  >
+
+                    <div className="mb-3 flex justify-between gap-3 text-sm">
+
+                      <strong>
                         Tiến trình xử lý
-                      </h4>
+                      </strong>
 
-                      <span className="text-sm tabular-nums text-[var(--color-text-muted)]">
-                  {formatElapsed(elapsed)}
-                </span>
+                      <span className="tabular-nums text-[var(--color-text-muted)]">
+                                    {formatElapsed(elapsed)}
+                                </span>
+
                     </div>
 
                     <p
-                        className={`text-sm mb-4 ${
-                            job?.status === "failed"
-                                ? "text-[var(--color-danger)]"
-                                : "text-[var(--color-primary)]"
-                        }`}
                         role="status"
-                        aria-live="polite"
+                        className="mb-4 text-sm text-[var(--color-primary)]"
                     >
-                      {progressLabel}
+                      {label}
                     </p>
 
-                    {usesUploadJobs() && <>
+                    {/* Processing stages */}
+
                     <div className="space-y-3">
-                      {PROCESSING_STEPS.map(
-                          (step, index) => {
-                            const isComplete =
-                                index < completedSteps;
 
-                            const isQueuePhase =
-                                job?.phase === "queued" ||
-                                job?.phase === "starting";
+                      {STEPS.map((step, index) => (
 
-                            const isCurrent =
-                                isUploading &&
-                                !isQueuePhase &&
-                                index === completedSteps;
+                          <div
+                              key={step.phase}
+                              className="flex items-center gap-3 text-sm"
+                          >
 
-                            const isFailed =
-                                job?.status === "failed" &&
-                                !isQueuePhase &&
-                                index === completedSteps;
+                                        <span
+                                            aria-hidden="true"
 
-                            return (
-                                <div
-                                    key={step.phase}
-                                    className="flex items-center gap-3"
-                                >
-                        <span
-                            className={`w-5 h-5 rounded-full shrink-0 flex items-center justify-center ${
-                                isComplete
-                                    ? "bg-emerald-500/15 text-[var(--color-success)]"
-                                    : isCurrent
-                                        ? "text-[var(--color-primary)]"
-                                        : isFailed
-                                            ? "text-[var(--color-danger)]"
-                                            : "border border-[var(--color-border-strong)]"
-                            }`}
-                        >
-                          {isComplete ? (
-                              <CheckIcon />
-                          ) : isCurrent ? (
-                              <Spinner />
-                          ) : isFailed ? (
-                              <span className="font-bold">
-                              !
-                            </span>
-                          ) : null}
-                        </span>
+                                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] ${
+                                                index < completed
+                                                    ? "text-emerald-500"
+                                                    : index === completed && busy
+                                                        ? "animate-pulse text-[var(--color-primary)]"
+                                                        : "text-[var(--color-text-muted)]"
+                                            }`}
+                                        >
 
-                                  <span
-                                      className={`text-sm ${
-                                          isComplete
-                                              ? "text-[var(--color-text)]"
-                                              : isCurrent
-                                                  ? "text-[var(--color-primary)] font-medium"
-                                                  : isFailed
-                                                      ? "text-[var(--color-danger)]"
-                                                      : "text-[var(--color-text-muted)]"
-                                      }`}
-                                  >
-                          {step.label}
-                        </span>
-                                </div>
-                            );
-                          },
-                      )}
+                                            {
+                                              index < completed
+                                                  ? "✓"
+                                                  : index === completed && busy
+                                                      ? "●"
+                                                      : "○"
+                                            }
+
+                                        </span>
+
+                            <span
+                                className={
+                                  index <= completed
+                                      ? "text-[var(--color-text)]"
+                                      : "text-[var(--color-text-muted)]"
+                                }
+                            >
+                                            {step.label}
+                                        </span>
+
+                          </div>
+
+                      ))}
+
                     </div>
 
                     <div
-                        className="mt-5 h-2 bg-[var(--color-bg-tertiary)] rounded-full overflow-hidden"
                         role="progressbar"
-                        aria-label="Số giai đoạn đã hoàn thành"
+                        aria-label="Giai đoạn hoàn thành"
                         aria-valuemin={0}
-                        aria-valuemax={totalSteps}
-                        aria-valuenow={completedSteps}
+                        aria-valuemax={STEPS.length}
+                        aria-valuenow={completed}
+                        className="mt-5 h-2 overflow-hidden rounded-full bg-[var(--color-bg-tertiary)]"
                     >
+
                       <div
-                          className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-500"
+                          className="h-full rounded-full bg-[var(--color-primary)] transition-all"
+
                           style={{
-                            width: `${progress}%`,
+                            width: `${completed / STEPS.length * 100}%`,
                           }}
                       />
+
                     </div>
 
-                    <div className="mt-2 flex items-center justify-between text-xs text-[var(--color-text-muted)]">
-                <span>
-                  Đã hoàn thành {completedSteps}/
-                  {totalSteps} giai đoạn
-                </span>
+                    <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+                      Đã hoàn thành {completed}/{STEPS.length} giai đoạn
+                    </p>
 
-                      <span>
-                  {job?.status === "queued"
-                      ? "Đang chờ"
-                      : job?.status === "completed"
-                          ? "Hoàn thành"
-                          : job?.status === "failed"
-                              ? "Thất bại"
-                              : isUploading
-                                  ? "Đang xử lý"
-                                  : "Dừng theo dõi"}
-                </span>
-                    </div>
+                    {/* Ambiguous submission */}
 
-                    </>}
-                    {!isUploading && hasActiveJob && (
-                        <p className="mt-3 text-xs text-[var(--color-text-secondary)]">
-                          Tác vụ có thể vẫn đang được xử lý
-                          trên máy chủ. Nhấn Tiếp tục theo
-                          dõi để kiểm tra lại mà không tải
-                          PDF lên lần nữa.
+                    {!jobId && !submitting && (
+
+                        <p className="mt-4 text-sm text-[var(--color-text-secondary)]">
+
+                          Máy chủ có thể đã nhận PDF nhưng trình
+                          duyệt chưa nhận được Job ID.
+                          Kiểm tra lịch sử trước khi tải lại.
+
                         </p>
-                    )}
-                  </div>
-              )}
-            </div>
-        )}
 
-        {/* Request and processing errors */}
+                    )}
+
+                    {/* Temporary connection errors */}
+
+                    {poll.kind === "retrying" && (
+
+                        <p className="mt-4 text-sm text-[var(--color-text-secondary)]">
+
+                          Đang kết nối lại ({poll.count}/4).
+                          PDF không được gửi lại.
+
+                        </p>
+
+                    )}
+
+                    {/* Polling paused */}
+
+                    {poll.kind === "paused" && (
+
+                        <p
+                            role="alert"
+                            className="mt-4 text-sm text-[var(--color-text-secondary)]"
+                        >
+
+                          {poll.message} Tác vụ có thể vẫn đang chạy;
+                          không cần gửi lại PDF để tiếp tục theo dõi.
+
+                        </p>
+
+                    )}
+
+                    {/* Confirmed backend failure */}
+
+                    {job?.status === "failed" && (
+
+                        <p
+                            role="alert"
+                            className="mt-4 text-sm text-[var(--color-danger)]"
+                        >
+
+                          {
+                              job.error ||
+                              "Không thể xử lý PDF."
+                          }
+
+                        </p>
+
+                    )}
+
+                    {/* Completed upload */}
+
+                    {job?.status === "completed" && (
+
+                        <button
+                            type="button"
+                            className={`${PRIMARY} mt-4`}
+                            onClick={openExam}
+                        >
+                          Làm bài
+                        </button>
+
+                    )}
+
+                    {/* Resume the same job */}
+
+                    {jobId &&
+                        poll.kind === "paused" &&
+                        !terminal && (
+
+                            <button
+                                type="button"
+                                className={`${PRIMARY} mt-4`}
+                                onClick={resume}
+                            >
+                              Tiếp tục theo dõi
+                            </button>
+
+                        )}
+
+                    {/* History and tracking controls */}
+
+                    {!busy && (
+
+                        <div className="mt-4 flex flex-wrap items-center gap-3">
+
+                          <Link
+                              to="/history"
+                              className="text-sm text-[var(--color-primary)]"
+                          >
+                            Kiểm tra lịch sử PDF
+                          </Link>
+
+                          <button
+                              type="button"
+                              className={SECONDARY}
+                              onClick={() =>
+                                  resetTracking()
+                              }
+                          >
+
+                            {
+                              terminal
+                                  ? "Chọn PDF khác"
+                                  : "Xóa theo dõi"
+                            }
+
+                          </button>
+
+                        </div>
+
+                    )}
+
+                    {busy && (
+
+                        <p className="mt-4 text-xs text-[var(--color-text-muted)]">
+
+                          {
+                            jobId
+                                ? "Bạn có thể rời trang hoặc refresh; quay lại trang chủ để tiếp tục theo dõi."
+                                : "Vui lòng không refresh khi đang chờ mã tác vụ."
+                          }
+
+                        </p>
+
+                    )}
+
+                  </section>
+
+              )}
+
+            </div>
+
+        )}
 
         {error && (
-            <div
-                className="mt-4 p-3 bg-[var(--color-danger-light)] text-[var(--color-danger)] rounded-md text-sm text-center"
+
+            <p
                 role="alert"
+                className="mt-4 rounded-md bg-[var(--color-danger-light)] p-3 text-sm text-[var(--color-danger)]"
             >
               {error}
-            </div>
+            </p>
+
         )}
+
+        {storageWarning && (
+
+            <p
+                role="alert"
+                className="mt-4 text-sm text-[var(--color-text-secondary)]"
+            >
+              {storageWarning}
+            </p>
+
+        )}
+
       </div>
   );
 }
