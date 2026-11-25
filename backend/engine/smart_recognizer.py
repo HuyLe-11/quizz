@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from backend.engine.paddle_client import recognize_pdf
+from .paddle_resilient import recognize_pdf
 
 logger = logging.getLogger("quizpdf")
 
