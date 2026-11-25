@@ -3,8 +3,8 @@
   "disable_existing_loggers": false,
   "formatters": {
     "standard": {
-      "format": "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-      "datefmt": "%H:%M:%S"
+      "format": "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S"
     }
   },
   "handlers": {
@@ -14,22 +14,27 @@
       "stream": "ext://sys.stderr"
     }
   },
+  "root": {
+    "handlers": ["console"],
+    "level": "WARNING"
+  },
   "loggers": {
+    "quizpdf": {
+      "handlers": ["console"],
+      "level": "INFO",
+      "propagate": false
+    },
     "uvicorn": {
       "handlers": ["console"],
       "level": "INFO",
       "propagate": false
     },
     "uvicorn.error": {
+      "handlers": [],
       "level": "INFO",
       "propagate": true
     },
     "uvicorn.access": {
-      "handlers": ["console"],
-      "level": "INFO",
-      "propagate": false
-    },
-    "quizpdf": {
       "handlers": ["console"],
       "level": "INFO",
       "propagate": false
