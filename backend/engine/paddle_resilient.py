@@ -1,4 +1,4 @@
-"""Cloud OCR adapter: bounded recovery of an already submitted job."""
+"""Cloud OCR with bounded recovery and geometry-preserving VL requests."""
 from __future__ import annotations
 
 import json
@@ -14,6 +14,50 @@ import requests
 from . import paddle_client as client
 
 logger = logging.getLogger("quizpdf")
+
+
+def _optional_payload(model: str) -> dict[str, bool]:
+    if model == "PaddleOCR-VL-1.6":
+        return {
+            "useDocOrientationClassify": False,
+            "useDocUnwarping": False,
+        }
+    return {}
+
+
+def _log_geometry(pages: list[dict], job_id: str) -> None:
+    for index, page in enumerate(pages, 1):
+        root = page.get("pruned_result")
+        root = root if isinstance(root, dict) else {}
+
+        pre = root.get("doc_preprocessor_res")
+        pre = pre if isinstance(pre, dict) else {}
+
+        settings = pre.get("model_settings")
+        settings = settings if isinstance(settings, dict) else {}
+
+        blocks = root.get("parsing_res_list")
+
+        root_settings = root.get("model_settings")
+        root_settings = (
+            root_settings
+            if isinstance(root_settings, dict)
+            else {}
+        )
+
+        logger.info(
+            "paddleocr:geometry job=%s page=%d width=%s height=%s "
+            "preprocessor=%s angle=%s unwarping=%s orientation=%s blocks=%d",
+            job_id,
+            index,
+            root.get("width"),
+            root.get("height"),
+            root_settings.get("use_doc_preprocessor"),
+            pre.get("angle"),
+            settings.get("use_doc_unwarping"),
+            settings.get("use_doc_orientation_classify"),
+            len(blocks) if isinstance(blocks, list) else 0,
+        )
 
 
 def _recoverable(error: Exception) -> bool:
@@ -41,17 +85,14 @@ def _with_recovery(
     recovery: float,
 ) -> Any:
     try:
-        return operation(
-            time.monotonic() + seconds
-        )
+        return operation(time.monotonic() + seconds)
 
     except Exception as exc:
         if not _recoverable(exc):
             raise
 
         logger.warning(
-            "paddleocr:recover "
-            "job=%s stage=%s "
+            "paddleocr:recover job=%s stage=%s "
             "extra_seconds=%.1f error_type=%s",
             job_id,
             stage,
@@ -59,9 +100,7 @@ def _with_recovery(
             type(exc).__name__,
         )
 
-    return operation(
-        time.monotonic() + recovery
-    )
+    return operation(time.monotonic() + recovery)
 
 
 def _poll(
@@ -131,14 +170,9 @@ def _poll(
                 f"Timed out waiting for PaddleOCR job {job_id}."
             )
 
-        time.sleep(
-            min(interval, remaining)
-        )
+        time.sleep(min(interval, remaining))
 
-        interval = min(
-            interval * 1.5,
-            15.0,
-        )
+        interval = min(interval * 1.5, 15.0)
 
 
 def _process_batch(
@@ -152,8 +186,16 @@ def _process_batch(
     recovery,
     result_timeout,
 ):
-    # A POST timeout is ambiguous:
-    # never automatically submit again.
+    payload = _optional_payload(model)
+
+    logger.info(
+        "paddleocr:submit_options model=%s options=%s",
+        model,
+        json.dumps(payload),
+    )
+
+    # Submit exactly once; POST timeouts must not
+    # cause duplicate OCR jobs.
     try:
         with batch.path.open("rb") as pdf:
             response = requests.post(
@@ -161,7 +203,7 @@ def _process_batch(
                 headers=headers,
                 data={
                     "model": model,
-                    "optionalPayload": json.dumps({}),
+                    "optionalPayload": json.dumps(payload),
                 },
                 files={
                     "file": (
@@ -191,15 +233,15 @@ def _process_batch(
 
     data = response.json()
 
-    payload = (
+    result = (
         data.get("data")
         if isinstance(data, dict)
         else None
     )
 
     job_id = (
-        payload.get("jobId")
-        if isinstance(payload, dict)
+        result.get("jobId")
+        if isinstance(result, dict)
         else None
     )
 
@@ -211,14 +253,11 @@ def _process_batch(
     job_id = str(job_id)
 
     logger.info(
-        "paddleocr:upload "
-        "status=completed job=%s first_page=%d",
+        "paddleocr:upload status=completed job=%s first_page=%d",
         job_id,
         batch.start_page + 1,
     )
 
-    # Poll responses are small:
-    # do not let one read use 180 seconds.
     status_timeout = (
         timeout[0],
         min(timeout[1], 30.0),
@@ -238,8 +277,8 @@ def _process_batch(
         recovery=recovery,
     )
 
-    # Do not forward the PaddleOCR Bearer token
-    # to the result storage provider.
+    # Never send the provider's Bearer token
+    # to the result URL.
     response = _with_recovery(
         lambda deadline: client._get_with_retries(
             url,
@@ -265,6 +304,13 @@ def _process_batch(
         model,
     )
 
+    # Log actual metadata. Never replace server geometry
+    # flags with requested values.
+    _log_geometry(
+        pages,
+        job_id,
+    )
+
     return job_id, pages, info
 
 
@@ -272,10 +318,7 @@ def recognize_pdf(
     path: str,
     model: str,
 ) -> tuple[str, dict[str, Any]]:
-
-    token = os.getenv(
-        "PADDLEOCR_ACCESS_TOKEN"
-    )
+    token = os.getenv("PADDLEOCR_ACCESS_TOKEN")
 
     if not token:
         raise RuntimeError(
@@ -312,8 +355,8 @@ def recognize_pdf(
 
     if recovery > 300:
         raise ValueError(
-            "PADDLEOCR_RECOVERY_TIMEOUT "
-            "must not exceed 300 seconds."
+            "PADDLEOCR_RECOVERY_TIMEOUT must not "
+            "exceed 300 seconds."
         )
 
     max_pages = int(
@@ -349,7 +392,7 @@ def recognize_pdf(
         )
 
     headers = {
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {token}",
     }
 
     timeout = (
@@ -358,15 +401,12 @@ def recognize_pdf(
     )
 
     all_pages = []
-
     jobs = []
-
     data_info = {}
 
     with tempfile.TemporaryDirectory(
         prefix="quizpdf-ocr-"
     ) as directory:
-
         workdir = Path(directory)
 
         normalized, converted = (
@@ -388,8 +428,7 @@ def recognize_pdf(
             1,
         ):
             logger.info(
-                "paddleocr:batch "
-                "status=started "
+                "paddleocr:batch status=started "
                 "index=%d total=%d first_page=%d",
                 index,
                 len(batches),
@@ -483,7 +522,8 @@ def recognize_pdf(
 
                 if len(other_pages) != len(pages):
                     raise RuntimeError(
-                        "Fallback OCR returned mismatched page count."
+                        "Fallback OCR returned "
+                        "mismatched page count."
                     )
 
                 for offset in missing:
@@ -512,28 +552,22 @@ def recognize_pdf(
             data_info.update(info)
 
             jobs.append({
-                "first_page":
-                    batch.start_page + 1,
-                "page_count":
-                    batch.page_count,
-                "jobs":
-                    history,
+                "first_page": batch.start_page + 1,
+                "page_count": batch.page_count,
+                "jobs": history,
             })
 
             logger.info(
-                "paddleocr:batch "
-                "status=completed index=%d total=%d",
+                "paddleocr:batch status=completed "
+                "index=%d total=%d",
                 index,
                 len(batches),
             )
 
     raw = {
-        "job_id":
-            jobs[0]["jobs"][0]["job_id"],
-        "data_info":
-            data_info,
-        "pages":
-            all_pages,
+        "job_id": jobs[0]["jobs"][0]["job_id"],
+        "data_info": data_info,
+        "pages": all_pages,
     }
 
     if len(jobs) > 1:
