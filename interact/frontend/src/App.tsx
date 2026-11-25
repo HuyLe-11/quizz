@@ -1,90 +1,168 @@
 import {
-  BrowserRouter,
-  Routes,
-  Route,
-  Link,
+    BrowserRouter,
+    Navigate,
+    Route,
+    Routes,
+    useLocation,
 } from "react-router-dom";
 
 import {
-  ThemeProvider,
-  QuizProvider,
+    QuizProvider,
+    ThemeProvider,
 } from "./contexts/AppProviders";
 
-import { StatsService } from "./services/stats";
-import { configureLocalApi } from "./services/api";
+import { AuthProvider } from "./contexts/AuthProvider";
+import { useAuth } from "./contexts/AuthContext";
 
 import { Header } from "./components/layout/Header";
+
+import { AuthPage } from "./pages/AuthPage";
 import { HomePage } from "./pages/HomePage";
 import { QuizPage } from "./pages/QuizPage";
 import { StatsPage } from "./pages/StatsPage";
 import { AttemptReview } from "./pages/AttemptReview";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExamPreviewPage } from "./pages/ExamPreviewPage";
+
+
+import { configureAuthenticatedApi } from "./services/api";
+import { requireSupabase } from "./services/supabase";
 import { ParserPreviewPage } from "./pages/ParserPreviewPage";
 
-StatsService.enableLocalHistory();
-configureLocalApi();
+configureAuthenticatedApi(async () => {
+    const {
+        data: { session },
+        error,
+    } = await requireSupabase().auth.getSession();
 
-function App() {
-  return (
-      <ThemeProvider>
-        <QuizProvider>
-          <BrowserRouter>
-            <div className="min-h-screen bg-[var(--color-bg)] transition-colors duration-200">
-              <Header />
+    if (error) {
+        throw new Error(
+            "Could not get authentication session.",
+            { cause: error },
+        );
+    }
 
-              <main className="pt-16">
-                <div className="mx-auto flex max-w-7xl justify-end px-6 pt-3">
-                  <Link
-                      to="/parser-preview"
-                      className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-sm font-medium text-[var(--color-primary)] hover:bg-[var(--color-surface-hover)]"
-                  >
-                    Parser Preview
-                  </Link>
-                </div>
+    if (!session?.access_token) {
+        throw new Error("Authentication required.");
+    }
 
-                <Routes>
-                  <Route
-                      path="/"
-                      element={<HomePage />}
-                  />
+    return `Bearer ${session.access_token}`;
+});
 
-                  <Route
-                      path="/parser-preview"
-                      element={<ParserPreviewPage />}
-                  />
+const parserPreviewEnabled =
+    import.meta.env.DEV &&
+    import.meta.env.VITE_PARSER_PREVIEW === "1";
 
-                  <Route
-                      path="/quiz/:examId"
-                      element={<QuizPage />}
-                  />
+function ApplicationRoutes() {
+    const { user, loading } = useAuth();
+    const location = useLocation();
 
-                  <Route
-                      path="/stats"
-                      element={<StatsPage />}
-                  />
-
-                  <Route
-                      path="/attempt/:attemptId"
-                      element={<AttemptReview />}
-                  />
-
-                  <Route
-                      path="/history"
-                      element={<HistoryPage />}
-                  />
-
-                  <Route
-                      path="/exams/:examId"
-                      element={<ExamPreviewPage />}
-                  />
-                </Routes>
-              </main>
+    if (loading) {
+        return (
+            <div
+                role="status"
+                className="flex min-h-screen items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-secondary)]"
+            >
+                Đang kiểm tra phiên đăng nhập...
             </div>
-          </BrowserRouter>
+        );
+    }
+
+    if (!user) {
+        const returnPath =
+            location.pathname + location.search;
+
+        return (
+            <Routes>
+                <Route
+                    path="/login"
+                    element={<AuthPage mode="login" />}
+                />
+
+                <Route
+                    path="/register"
+                    element={<AuthPage mode="register" />}
+                />
+
+                <Route
+                    path="*"
+                    element={
+                        <Navigate
+                            to="/login"
+                            replace
+                            state={{ from: returnPath }}
+                        />
+                    }
+                />
+            </Routes>
+        );
+    }
+
+    return (
+        <QuizProvider key={user.id}>
+            <div className="min-h-screen bg-[var(--color-bg)] transition-colors duration-200">
+                <Header />
+
+                <main className="pt-16">
+                    <Routes>
+                        <Route
+                            path="/"
+                            element={<HomePage />}
+                        />
+
+                        <Route
+                            path="/quiz/:examId"
+                            element={<QuizPage />}
+                        />
+
+                        {parserPreviewEnabled && (
+                            <Route
+                                path="/parser-preview"
+                                element={<ParserPreviewPage />}
+                            />
+                        )}
+
+                        <Route
+                            path="/stats"
+                            element={<StatsPage />}
+                        />
+
+                        <Route
+                            path="/attempt/:attemptId"
+                            element={<AttemptReview />}
+                        />
+
+                        <Route
+                            path="/history"
+                            element={<HistoryPage />}
+                        />
+
+                        <Route
+                            path="/exams/:examId"
+                            element={<ExamPreviewPage />}
+                        />
+
+                        <Route
+                            path="*"
+                            element={
+                                <Navigate to="/" replace />
+                            }
+                        />
+                    </Routes>
+                </main>
+            </div>
         </QuizProvider>
-      </ThemeProvider>
-  );
+    );
 }
 
-export default App;
+export default function App() {
+    return (
+        <ThemeProvider>
+            <AuthProvider>
+                <BrowserRouter>
+                    <ApplicationRoutes />
+                </BrowserRouter>
+            </AuthProvider>
+        </ThemeProvider>
+    );
+}

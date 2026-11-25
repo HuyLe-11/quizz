@@ -1,1 +1,13 @@
+# Environment variables and credentials
 .env
+
+# Local Python virtual environment
+.venv/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local logs
+*.log

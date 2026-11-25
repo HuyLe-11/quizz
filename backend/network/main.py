@@ -1,10 +1,11 @@
-"""QuizPDF API: PaddleOCR ingestion, SQLite, PDF crops and red-mark review."""
-
+# QuizPDF API: ingestion, upload jobs, SQLite history and PDF review.
 import hashlib
+import json
 import logging
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -12,15 +13,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pymupdf
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.concurrency import run_in_threadpool
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
+from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 try:
     from backend import db
+    from backend.network.upload_jobs import (
+        Progress,
+        UploadJobManager,
+        UploadQueueFull,
+    )
     from backend.engine.paddle_client import (
         PaddleOCRAPIError,
         PaddleOCRTimeoutError,
@@ -32,12 +47,18 @@ try:
         crop_question_pdf,
         detect_red_mark_pdf,
     )
-    from backend.engine.quiz_parser import parse_questions
     from backend.engine.parser_pipeline import parse_pdf_questions
+
 except ModuleNotFoundError as exc:
     if exc.name != "backend":
         raise
+
     import db
+    from network.upload_jobs import (
+        Progress,
+        UploadJobManager,
+        UploadQueueFull,
+    )
     from engine.paddle_client import (
         PaddleOCRAPIError,
         PaddleOCRTimeoutError,
@@ -49,46 +70,120 @@ except ModuleNotFoundError as exc:
         crop_question_pdf,
         detect_red_mark_pdf,
     )
-    from engine.quiz_parser import parse_questions
     from engine.parser_pipeline import parse_pdf_questions
 
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+load_dotenv(
+    Path(__file__).resolve().parents[1] / ".env"
+)
 
 MAX_PDF_BYTES = 30 * 1024 * 1024
-ALLOWED_MODELS = {"PaddleOCR-VL-1.6", "PP-OCRv6"}
+
+ALLOWED_MODELS = {
+    "PaddleOCR-VL-1.6",
+    "PP-OCRv6",
+}
 
 logger = logging.getLogger("quizpdf")
 
+PDF_LOCK = threading.Lock()
+PARSER_PIPELINE_VERSION = "shared-v1"
+
+
+def _parse_upload_questions(
+    contents: bytes,
+    page_texts: list[str],
+    markdown: str,
+    name: str,
+) -> list[dict]:
+    """Use the same parser for SQLite and new cloud bundles."""
+    with PDF_LOCK:
+        try:
+            with pymupdf.open(stream=contents, filetype="pdf") as document:
+                if document.needs_pass or not len(document):
+                    raise ValueError("Encrypted or empty PDF")
+                expected_pages = len(document)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                400,
+                "Kh\u00f4ng th\u1ec3 m\u1edf PDF ho\u1eb7c PDF c\u00f3 m\u1eadt kh\u1ea9u.",
+            ) from exc
+
+        pages = list(page_texts)
+
+        if not pages and expected_pages == 1 and markdown.strip():
+            pages = [markdown]
+
+        if len(pages) != expected_pages:
+            logger.warning(
+                "parser=page_mismatch expected=%d actual=%d",
+                expected_pages,
+                len(pages),
+            )
+            raise HTTPException(
+                502,
+                "S\u1ed1 trang OCR kh\u00f4ng kh\u1edbp PDF g\u1ed1c. "
+                "Kh\u00f4ng l\u01b0u \u0111\u1ec1 \u0111\u1ec3 tr\u00e1nh sai trang ngu\u1ed3n.",
+            )
+
+        parsed = parse_pdf_questions(contents, pages, name)
+
+    return parsed["questions"]
+
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     logger.info(
         "phase=startup_database status=started "
         "database_path=%s storage_path=%s",
         db.DATABASE_PATH,
         db.STORAGE_DIR,
     )
+
     try:
         db.initialize_database()
+
     except PermissionError as exc:
         logger.exception(
             "phase=startup_database status=failed "
-            "reason=storage_not_writable"
+            "reason=storage_not_writable "
+            "database_path=%s storage_path=%s",
+            db.DATABASE_PATH,
+            db.STORAGE_DIR,
         )
+
         raise RuntimeError(
             "Không thể ghi vào thư mục SQLite/storage. "
-            "Kiểm tra DATABASE_PATH và STORAGE_DIR."
+            "Kiểm tra DATABASE_PATH và STORAGE_DIR; "
+            "Render cần Persistent Disk, còn Vercel chỉ "
+            "hỗ trợ filesystem tạm trong /tmp."
         ) from exc
+
     except Exception:
-        logger.exception("phase=startup_database status=failed")
+        logger.exception(
+            "phase=startup_database status=failed"
+        )
         raise
 
-    logger.info("phase=startup_database status=completed")
-    yield
+    logger.info(
+        "phase=startup_database status=completed"
+    )
+
+    app.state.upload_jobs = UploadJobManager()
+
+    try:
+        yield
+
+    finally:
+        await run_in_threadpool(
+            app.state.upload_jobs.shutdown
+        )
 
 
-app = FastAPI(title="QuizPDF API", lifespan=lifespan)
+app = FastAPI(
+    title="QuizPDF API",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -106,7 +201,10 @@ app.add_middleware(
 
 app.mount(
     "/api/assets",
-    StaticFiles(directory=str(db.ASSETS_DIR), check_dir=False),
+    StaticFiles(
+        directory=str(db.ASSETS_DIR),
+        check_dir=False,
+    ),
     name="assets",
 )
 
@@ -133,19 +231,30 @@ def _json_blocks(blocks: list[dict]) -> str:
     )
 
 
-def _asset_url(relative_path: str | None) -> str | None:
+def _asset_url(
+    relative_path: str | None,
+) -> str | None:
     if not relative_path:
         return None
-    return "/api/assets/" + "/".join(Path(relative_path).parts)
+
+    return (
+        "/api/assets/"
+        + "/".join(Path(relative_path).parts)
+    )
 
 
-def _needs_crop_fallback(question: dict) -> bool:
-    if question.get("parse_fallback"):
+def _needs_crop_fallback(
+    question: dict,
+) -> bool:
+    if question.get("parse_fallback") or question.get("requires_source_image"):
         return True
 
     text = " ".join(
         str(block.get("value", ""))
-        for block in question.get("question_content", [])
+        for block in question.get(
+            "question_content",
+            [],
+        )
         if isinstance(block, dict)
     ).strip()
 
@@ -173,74 +282,94 @@ def _needs_crop_fallback(question: dict) -> bool:
     return False
 
 
-def _assign_unique_question_ids(questions: list[dict]) -> None:
-    """Preserve PDF numbering while assigning unique IDs per exam."""
+def _assign_unique_question_ids(
+    questions: list[dict],
+) -> None:
+    # Keep original PDF numbering while ensuring unique DB IDs.
+
     source_numbers = [
         int(question.get("question_id") or index)
-        for index, question in enumerate(questions, 1)
+        for index, question in enumerate(
+            questions,
+            1,
+        )
     ]
 
     reserved = set(source_numbers)
     used: set[int] = set()
-    next_number = max(reserved, default=0) + 1
 
-    for index, question in enumerate(questions, 1):
+    next_number = max(
+        reserved,
+        default=0,
+    ) + 1
+
+    for index, question in enumerate(
+        questions,
+        1,
+    ):
         source_number = int(
             question.get("question_id") or index
         )
-        question["source_question_number"] = source_number
+
+        question["source_question_number"] = (
+            source_number
+        )
 
         if source_number in used:
-            while next_number in reserved or next_number in used:
+            while (
+                next_number in reserved
+                or next_number in used
+            ):
                 next_number += 1
 
             question["question_id"] = next_number
+
             question["composite_id"] = (
                 f"{question['composite_id']}"
-                f"__page{question.get('page_number') or 1}_{next_number}"
+                f"__page{question.get('page_number') or 1}"
+                f"_{next_number}"
             )
+
             used.add(next_number)
             next_number += 1
+
         else:
             question["question_id"] = source_number
             used.add(source_number)
 
 
-def _exam_ocr_pages(exam: dict) -> list:
-    extra = (
-        exam.get("extra")
-        if isinstance(exam.get("extra"), dict)
-        else {}
+def _question_response(
+    question: dict,
+) -> dict:
+    detection = question.get(
+        "red_mark_detection"
     )
-    response = (
-        extra.get("ocr_response")
-        if isinstance(extra.get("ocr_response"), dict)
-        else {}
-    )
-    pages = response.get("pages")
 
-    return pages if isinstance(pages, list) else []
-
-
-def _question_response(question: dict) -> dict:
-    detection = question.get("red_mark_detection")
     asset = question.get("asset")
 
     return {
         "question_id": question["question_id"],
         "question_record_id": question["id"],
-        "has_source_pdf": bool(question.get("has_source_pdf")),
+        "has_source_pdf": bool(
+            question.get("has_source_pdf")
+        ),
         "pdf_question_number": question.get(
             "source_question_number",
             question["question_id"],
         ),
         "type": question["type"],
-        "multiple_choice": bool(question["multiple_choice"]),
-        "question": _json_blocks(question["question_content"]),
+        "multiple_choice": bool(
+            question["multiple_choice"]
+        ),
+        "question": _json_blocks(
+            question["question_content"]
+        ),
         "options": [
             {
                 "label": option["label"],
-                "content": _json_blocks(option["content"]),
+                "content": _json_blocks(
+                    option["content"]
+                ),
             }
             for option in question["mcp_options"]
         ],
@@ -258,19 +387,27 @@ def _question_response(question: dict) -> dict:
                 "description": _json_blocks(
                     pair["description_content"] or []
                 ),
-                "answer": _json_blocks(pair["answer_content"]),
+                "answer": _json_blocks(
+                    pair["answer_content"]
+                ),
             }
             for pair in question["match_pairs"]
         ],
         "explanation": _json_blocks(
             question["explanation_content"]
         ),
-        "page_number": question.get("page_number"),
+        "page_number": question.get(
+            "page_number"
+        ),
         "question_image_url": _asset_url(
-            asset.get("image_path") if asset else None
+            asset.get("image_path")
+            if asset
+            else None
         ),
         "crop_status": (
-            asset.get("crop_status") if asset else "not_created"
+            asset.get("crop_status")
+            if asset
+            else "not_created"
         ),
         "red_mark_detection": detection,
         "user_confirmed_answer": (
@@ -285,28 +422,39 @@ def _question_response(question: dict) -> dict:
 def health():
     return {
         "success": True,
-        "data": {"status": "ok", "database": "sqlite"},
+        "data": {
+            "status": "ok",
+            "database": "sqlite",
+        },
     }
 
 
-@app.post("/api/upload")
-async def upload_pdf(
-    file: UploadFile = File(...),
-    model: str = Form("PaddleOCR-VL-1.6"),
-):
+async def _read_upload(
+    file: UploadFile,
+    model: str,
+) -> tuple[bytes, str]:
+
     if (
         file.content_type != "application/pdf"
-        and not (file.filename or "").lower().endswith(".pdf")
+        and not (file.filename or "").lower().endswith(
+            ".pdf"
+        )
     ):
-        raise HTTPException(400, "Vui lòng tải lên tệp PDF.")
+        raise HTTPException(
+            400,
+            "Vui lòng tải lên tệp PDF.",
+        )
 
     if model not in ALLOWED_MODELS:
         raise HTTPException(
             400,
-            "Mô hình OCR không hợp lệ.",
+            "Mô hình phải là một trong các lựa chọn: "
+            f"{', '.join(sorted(ALLOWED_MODELS))}.",
         )
 
-    contents = await file.read(MAX_PDF_BYTES + 1)
+    contents = await file.read(
+        MAX_PDF_BYTES + 1
+    )
 
     if len(contents) > MAX_PDF_BYTES:
         raise HTTPException(
@@ -320,9 +468,24 @@ async def upload_pdf(
             "Tệp tải lên không phải PDF hợp lệ.",
         )
 
+    return (
+        contents,
+        file.filename or "bai_trac_nghiem.pdf",
+    )
+
+
+def _process_pdf(
+    contents: bytes,
+    filename: str,
+    model: str,
+    progress: Progress = lambda _: None,
+) -> dict:
+    # Shared processing pipeline for legacy and asynchronous uploads.
+
     exam_id = str(uuid.uuid4())
+
     name = (
-        Path(file.filename or "bai_trac_nghiem.pdf").stem.strip()
+        Path(filename).stem.strip()
         or "Bài trắc nghiệm PDF"
     )
 
@@ -334,11 +497,20 @@ async def upload_pdf(
     )
 
     pdf_directory = db.STORAGE_DIR / "pdfs"
-    pdf_directory.mkdir(parents=True, exist_ok=True)
+
+    pdf_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     stored_pdf = pdf_directory / f"{exam_id}.pdf"
 
     tmp_path = None
+
+    # Phase 1: PaddleOCR.
     phase_started = time.perf_counter()
+
+    progress("ocr")
 
     logger.info(
         "upload=%s phase=ocr status=started",
@@ -353,11 +525,11 @@ async def upload_pdf(
             temp_file.write(contents)
             tmp_path = temp_file.name
 
-        markdown, raw_response = await run_in_threadpool(
-            recognize_pdf,
+        markdown, raw_response = recognize_pdf(
             tmp_path,
             model,
         )
+
     except Exception as exc:
         logger.exception(
             "upload=%s phase=ocr status=failed",
@@ -368,27 +540,33 @@ async def upload_pdf(
             raise HTTPException(
                 503,
                 "PaddleOCR chưa được cấu hình. "
-                "Hãy đặt PADDLEOCR_ACCESS_TOKEN trong backend/.env.",
+                "Hãy đặt PADDLEOCR_ACCESS_TOKEN "
+                "trong backend/.env.",
             ) from exc
 
         if isinstance(exc, PaddleOCRAPIError):
             raise HTTPException(
                 502,
-                f"PaddleOCR API trả HTTP {exc.status_code} "
-                f"ở bước {exc.stage}.",
+                f"PaddleOCR API trả HTTP "
+                f"{exc.status_code} ở bước {exc.stage}. "
+                "Kiểm tra token và log Runtime của backend.",
             ) from exc
 
         if isinstance(exc, PaddleOCRTimeoutError):
             raise HTTPException(
                 504,
-                "PaddleOCR xử lý quá thời gian chờ.",
+                "PaddleOCR xử lý quá thời gian chờ "
+                "của ứng dụng. Hãy thử PDF ngắn hơn "
+                "hoặc chọn PP-OCRv6.",
             ) from exc
 
         raise HTTPException(
             502,
             "Không thể xử lý PDF bằng PaddleOCR "
-            f"({type(exc).__name__}).",
+            f"({type(exc).__name__}). "
+            "Hãy kiểm tra cấu hình API và log backend.",
         ) from exc
+
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -401,39 +579,28 @@ async def upload_pdf(
 
     logger.info(
         "upload=%s phase=ocr status=completed "
-        "duration_seconds=%.2f pages=%d",
+        "duration_seconds=%.2f pages=%d markdown_chars=%d",
         exam_id,
         time.perf_counter() - phase_started,
         len(pages),
+        len(markdown or ""),
     )
 
-    # Use the same PDF-backed recovery steps as Parser Preview.
+    # Phase 2: Extract questions.
     phase_started = time.perf_counter()
+
+    progress("question_extraction")
 
     logger.info(
         "upload=%s phase=question_extraction status=started",
         exam_id,
     )
 
-    raw_page_texts = extract_page_texts(raw_response)
+    page_texts = extract_page_texts(raw_response)
 
-    if not raw_page_texts and markdown:
-        raw_page_texts = [markdown]
-
-    if raw_page_texts:
-        parsed = await run_in_threadpool(
-            parse_pdf_questions,
-            contents,
-            raw_page_texts,
-            name,
-        )
-        page_texts = parsed["page_texts"]
-        questions = parsed["questions"]
-        parser_diagnostics = parsed["diagnostics"]
-    else:
-        page_texts = []
-        questions = parse_questions(markdown or "", name)
-        parser_diagnostics = {}
+    questions = _parse_upload_questions(
+        contents, page_texts, markdown, name,
+    )
 
     if not questions:
         questions = [{
@@ -444,8 +611,9 @@ async def upload_pdf(
             "question_content": [{
                 "type": "text",
                 "value": (
-                    "Chưa trích xuất được nội dung câu hỏi. "
-                    "Hãy xem ảnh trang PDF để kiểm tra."
+                    "Chưa trích xuất được nội dung "
+                    "câu hỏi. Hãy xem ảnh trang PDF "
+                    "để kiểm tra."
                 ),
             }],
             "explanation_content": [],
@@ -458,25 +626,21 @@ async def upload_pdf(
 
     _assign_unique_question_ids(questions)
 
-    # Composite IDs must be globally unique across uploaded exams.
-    for question in questions:
-        question["composite_id"] = (
-            f"{exam_id}_{question['composite_id']}"
-        )
-
     logger.info(
-        "upload=%s phase=question_extraction status=completed "
-        "duration_seconds=%.2f pages=%d questions=%d "
-        "recovered_headings=%d fidelity_repairs=%d",
+        "upload=%s phase=question_extraction "
+        "status=completed duration_seconds=%.2f "
+        "pages=%d questions=%d",
         exam_id,
         time.perf_counter() - phase_started,
         len(page_texts),
         len(questions),
-        len(parser_diagnostics.get("recovered_headings", [])),
-        len(parser_diagnostics.get("pdf_fidelity_repairs", [])),
     )
 
+    # Phase 3: Save source PDF.
     phase_started = time.perf_counter()
+
+    progress("source_pdf_save")
+
     logger.info(
         "upload=%s phase=source_pdf_save status=started",
         exam_id,
@@ -484,37 +648,53 @@ async def upload_pdf(
 
     try:
         stored_pdf.write_bytes(contents)
-    except Exception as exc:
+
+    except Exception:
         logger.exception(
             "upload=%s phase=source_pdf_save status=failed",
             exam_id,
         )
+
         raise HTTPException(
             500,
             "Không thể lưu PDF gốc trên máy chủ.",
-        ) from exc
+        ) from None
 
     logger.info(
-        "upload=%s phase=source_pdf_save status=completed "
-        "duration_seconds=%.2f",
+        "upload=%s phase=source_pdf_save "
+        "status=completed duration_seconds=%.2f",
         exam_id,
         time.perf_counter() - phase_started,
     )
 
+    # Phase 4: Create fallback question images.
     questions_for_db = []
-    ocr_pages = pages if isinstance(pages, list) else []
+
+    ocr_pages = (
+        pages
+        if isinstance(pages, list)
+        else []
+    )
 
     phase_started = time.perf_counter()
+
+    progress("question_crops")
+
     logger.info(
-        "upload=%s phase=question_crops status=started "
-        "questions=%d",
+        "upload=%s phase=question_crops "
+        "status=started questions=%d",
         exam_id,
         len(questions),
     )
 
-    for index, question in enumerate(questions, 1):
+    for index, question in enumerate(
+        questions,
+        1,
+    ):
         question_id = str(uuid.uuid4())
+
         question["id"] = question_id
+
         question["created_at"] = (
             datetime.now(timezone.utc).isoformat()
         )
@@ -529,15 +709,20 @@ async def upload_pdf(
             ):
                 if not child.get("id"):
                     child["id"] = str(uuid.uuid4())
-                child.setdefault("order_index", child_index)
+
+                child.setdefault(
+                    "order_index",
+                    child_index,
+                )
 
         if _needs_crop_fallback(question):
             crop_started = time.perf_counter()
 
             logger.info(
-                "upload=%s phase=question_crop status=started "
-                "question_index=%d question_number=%d "
-                "source_question_number=%d page=%s",
+                "upload=%s phase=question_crop "
+                "status=started question_index=%d "
+                "question_number=%d source_question_number=%d "
+                "page=%s",
                 exam_id,
                 index,
                 question["question_id"],
@@ -547,63 +732,83 @@ async def upload_pdf(
 
             try:
                 relative_image = (
-                    Path(exam_id) / f"question-{question_id}.png"
+                    Path(exam_id)
+                    / f"question-{question_id}.png"
                 )
-                image_path = db.ASSETS_DIR / relative_image
 
-                asset = crop_question_pdf(
-                    stored_pdf,
-                    question["source_question_number"],
-                    question.get("page_number"),
-                    image_path,
-                    ocr_pages=ocr_pages,
+                image_path = (
+                    db.ASSETS_DIR / relative_image
                 )
-                asset["image_path"] = relative_image.as_posix()
+
+                with PDF_LOCK:
+                    asset = crop_question_pdf(
+                        stored_pdf,
+                        question["source_question_number"],
+                        question.get("page_number"),
+                        image_path,
+                        ocr_pages=ocr_pages,
+                    )
+
+                asset["image_path"] = (
+                    relative_image.as_posix()
+                )
 
                 logger.info(
-                    "upload=%s phase=question_crop status=completed "
-                    "question_index=%d source=%s "
-                    "duration_seconds=%.2f",
+                    "upload=%s phase=question_crop "
+                    "status=completed question_index=%d "
+                    "source=%s duration_seconds=%.2f",
                     exam_id,
                     index,
                     asset.get("source"),
                     time.perf_counter() - crop_started,
                 )
+
             except Exception as exc:
                 logger.exception(
-                    "upload=%s phase=question_crop status=failed "
-                    "question_index=%d error_type=%s",
+                    "upload=%s phase=question_crop "
+                    "status=failed question_index=%d "
+                    "source_question_number=%d "
+                    "page=%s error_type=%s",
                     exam_id,
                     index,
+                    question["source_question_number"],
+                    question.get("page_number"),
                     type(exc).__name__,
                 )
 
                 asset = {
                     "image_path": None,
-                    "page_number": question.get("page_number"),
+                    "page_number": question.get(
+                        "page_number"
+                    ),
                     "crop_coordinates": None,
                     "crop_status": "failed",
                     "source": None,
                 }
+
         else:
             asset = {
                 "image_path": None,
-                "page_number": question.get("page_number"),
+                "page_number": question.get(
+                    "page_number"
+                ),
                 "crop_coordinates": None,
                 "crop_status": "not_created",
                 "source": None,
             }
 
         question["asset"] = asset
+
         questions_for_db.append(question)
 
     logger.info(
-        "upload=%s phase=question_crops status=completed "
-        "duration_seconds=%.2f",
+        "upload=%s phase=question_crops "
+        "status=completed duration_seconds=%.2f",
         exam_id,
         time.perf_counter() - phase_started,
     )
 
+    # Phase 5: Save exam to SQLite.
     exam = {
         "id": exam_id,
         "name": name,
@@ -612,31 +817,42 @@ async def upload_pdf(
         "author": None,
         "uploaded_by": None,
         "duration_minutes": None,
-        "source_file": file.filename,
+        "source_file": filename,
         "source_path": str(stored_pdf),
-        "source_sha256": hashlib.sha256(contents).hexdigest(),
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "source_sha256": (
+            hashlib.sha256(contents).hexdigest()
+        ),
+        "uploaded_at": (
+            datetime.now(timezone.utc).isoformat()
+        ),
         "extra": {
             "ocr_model": model,
             "ocr_markdown": markdown,
             "ocr_response": raw_response,
-            "parser_diagnostics": parser_diagnostics,
+            "parser_pipeline_version": PARSER_PIPELINE_VERSION,
         },
     }
 
     phase_started = time.perf_counter()
 
+    progress("sqlite_save")
+
     logger.info(
-        "upload=%s phase=sqlite_save status=started "
-        "questions=%d",
+        "upload=%s phase=sqlite_save "
+        "status=started questions=%d",
         exam_id,
         len(questions_for_db),
     )
 
     try:
-        db.insert_exam(exam, questions_for_db)
+        db.insert_exam(
+            exam,
+            questions_for_db,
+        )
+
     except Exception as exc:
         stored_pdf.unlink(missing_ok=True)
+
         shutil.rmtree(
             db.ASSETS_DIR / exam_id,
             ignore_errors=True,
@@ -644,33 +860,149 @@ async def upload_pdf(
 
         logger.exception(
             "upload=%s phase=sqlite_save status=failed "
-            "questions=%d error_type=%s",
+            "questions=%d error_type=%s error=%s",
             exam_id,
             len(questions_for_db),
             type(exc).__name__,
+            str(exc),
         )
 
         raise HTTPException(
             500,
             "Không thể lưu đề thi vào SQLite "
             f"({type(exc).__name__}). "
-            f"Kiểm tra log backend theo mã {exam_id}.",
+            "Hãy kiểm tra log backend "
+            f"theo mã {exam_id}.",
         ) from exc
 
     logger.info(
-        "upload=%s phase=sqlite_save status=completed "
-        "duration_seconds=%.2f",
+        "upload=%s phase=sqlite_save "
+        "status=completed duration_seconds=%.2f",
         exam_id,
         time.perf_counter() - phase_started,
     )
 
     return {
+        "exam_id": exam_id,
+        "title": name,
+        "question_count": len(questions_for_db),
+    }
+
+
+# Legacy upload endpoint.
+@app.post("/api/upload")
+async def upload_pdf(
+    file: UploadFile = File(...),
+    model: str = Form("PaddleOCR-VL-1.6"),
+):
+    contents, filename = await _read_upload(
+        file,
+        model,
+    )
+
+    result = await run_in_threadpool(
+        _process_pdf,
+        contents,
+        filename,
+        model,
+    )
+
+    return {
         "success": True,
-        "data": {
-            "exam_id": exam_id,
-            "title": name,
-            "question_count": len(questions_for_db),
-        },
+        "data": result,
+    }
+
+
+# Asynchronous Request-Reply: submit job.
+@app.post(
+    "/api/upload/jobs",
+    status_code=202,
+)
+async def create_upload_job(
+    request: Request,
+    response: Response,
+    file: UploadFile = File(...),
+    model: str = Form("PaddleOCR-VL-1.6"),
+):
+    if os.getenv("VERCEL"):
+        raise HTTPException(
+            503,
+            "Chế độ xử lý nền chỉ dành cho "
+            "backend chạy liên tục.",
+        )
+
+    contents, filename = await _read_upload(
+        file,
+        model,
+    )
+
+    manager: UploadJobManager = (
+        request.app.state.upload_jobs
+    )
+
+    try:
+        job = manager.submit(
+            lambda progress: _process_pdf(
+                contents,
+                filename,
+                model,
+                progress,
+            )
+        )
+
+    except UploadQueueFull as exc:
+        raise HTTPException(
+            429,
+            "Hàng đợi PDF đã đầy. Hãy thử lại sau.",
+            headers={
+                "Retry-After": "5",
+            },
+        ) from exc
+
+    response.headers["Location"] = (
+        f"/api/upload/jobs/{job['job_id']}"
+    )
+
+    response.headers["Retry-After"] = "2"
+
+    response.headers["Cache-Control"] = "no-store"
+
+    return {
+        "success": True,
+        "data": job,
+    }
+
+
+# Asynchronous Request-Reply: query job status.
+@app.get("/api/upload/jobs/{job_id}")
+def get_upload_job(
+    job_id: str,
+    request: Request,
+    response: Response,
+):
+    manager: UploadJobManager = (
+        request.app.state.upload_jobs
+    )
+
+    job = manager.get(job_id)
+
+    if job is None:
+        raise HTTPException(
+            404,
+            "Không tìm thấy tác vụ xử lý PDF.",
+        )
+
+    response.headers["Cache-Control"] = "no-store"
+
+    if job["status"] in {
+        "queued",
+        "processing",
+    }:
+        response.headers["Retry-After"] = "2"
+
+    return {
+        "success": True,
+        "data": job,
     }
 
 
@@ -687,7 +1019,10 @@ def get_exam(exam_id: str):
     exam = db.get_exam_record(exam_id)
 
     if not exam:
-        raise HTTPException(404, "Không tìm thấy đề thi.")
+        raise HTTPException(
+            404,
+            "Không tìm thấy đề thi.",
+        )
 
     questions = [
         _question_response(question)
@@ -698,7 +1033,9 @@ def get_exam(exam_id: str):
         "success": True,
         "data": {
             "id": exam["id"],
-            "subject_id": exam.get("subject") or "uploaded",
+            "subject_id": (
+                exam.get("subject") or "uploaded"
+            ),
             "title": exam["name"],
             "question_count": len(questions),
             "questions": questions,
@@ -712,23 +1049,36 @@ def get_exam(exam_id: str):
     }
 
 
-@app.post("/api/questions/{question_record_id}/crop-image")
+@app.post(
+    "/api/questions/{question_record_id}/crop-image"
+)
 def crop_question_image(
     question_record_id: str,
     force: bool = False,
 ):
-    found = db.get_question_record(question_record_id)
+    found = db.get_question_record(
+        question_record_id
+    )
 
     if not found:
-        raise HTTPException(404, "Không tìm thấy câu hỏi.")
+        raise HTTPException(
+            404,
+            "Không tìm thấy câu hỏi.",
+        )
 
     exam, question = found
+
     pdf_path = exam.get("source_path")
 
-    if not pdf_path or not Path(pdf_path).is_file():
+    if (
+        not pdf_path
+        or not Path(pdf_path).is_file()
+    ):
         raise HTTPException(
             409,
-            "Bản ghi này không có PDF gốc.",
+            "Bản ghi này không có PDF gốc. "
+            "Chỉ các PDF tải lên sau khi bật lưu trữ "
+            "mới tạo được ảnh câu hỏi.",
         )
 
     existing = question.get("asset")
@@ -740,7 +1090,8 @@ def crop_question_image(
         and existing.get("image_path")
     ):
         if (
-            db.ASSETS_DIR / existing["image_path"]
+            db.ASSETS_DIR
+            / existing["image_path"]
         ).is_file():
             return {
                 "success": True,
@@ -757,24 +1108,38 @@ def crop_question_image(
         Path(exam["id"])
         / f"question-{question_record_id}.png"
     )
-    image_path = db.ASSETS_DIR / relative_image
+
+    image_path = (
+        db.ASSETS_DIR / relative_image
+    )
 
     try:
-        asset = crop_question_pdf(
-            pdf_path,
-            question.get(
-                "source_question_number",
-                question["question_id"],
-            ),
-            question.get("page_number"),
-            image_path,
-            ocr_pages=_exam_ocr_pages(exam),
+        with PDF_LOCK:
+            asset = crop_question_pdf(
+                pdf_path,
+                question.get(
+                    "source_question_number",
+                    question["question_id"],
+                ),
+                question.get("page_number"),
+                image_path,
+                ocr_pages=(
+                    exam.get("extra", {})
+                    .get("ocr_response", {})
+                    .get("pages", [])
+                ),
+            )
+
+        asset["image_path"] = (
+            relative_image.as_posix()
         )
-        asset["image_path"] = relative_image.as_posix()
+
     except Exception as exc:
         asset = {
             "image_path": None,
-            "page_number": question.get("page_number"),
+            "page_number": question.get(
+                "page_number"
+            ),
             "crop_coordinates": None,
             "crop_status": "failed",
             "source": None,
@@ -784,6 +1149,7 @@ def crop_question_image(
             question_record_id,
             asset,
         )
+
         raise HTTPException(
             422,
             "Không thể tạo ảnh câu hỏi "
@@ -799,29 +1165,43 @@ def crop_question_image(
         "success": True,
         "data": {
             **asset,
-            "image_url": _asset_url(asset["image_path"]),
+            "image_url": _asset_url(
+                asset["image_path"]
+            ),
             "cached": False,
         },
     }
 
 
-@app.post("/api/questions/{question_record_id}/detect-red-mark")
+@app.post(
+    "/api/questions/{question_record_id}/detect-red-mark"
+)
 def detect_question_red_mark(
     question_record_id: str,
     force: bool = False,
 ):
-    found = db.get_question_record(question_record_id)
+    found = db.get_question_record(
+        question_record_id
+    )
 
     if not found:
-        raise HTTPException(404, "Không tìm thấy câu hỏi.")
+        raise HTTPException(
+            404,
+            "Không tìm thấy câu hỏi.",
+        )
 
     exam, question = found
+
     pdf_path = exam.get("source_path")
 
-    if not pdf_path or not Path(pdf_path).is_file():
+    if (
+        not pdf_path
+        or not Path(pdf_path).is_file()
+    ):
         raise HTTPException(
             409,
-            "Bản ghi này không có PDF gốc để nhận diện dấu đỏ.",
+            "Bản ghi này không có PDF gốc "
+            "để nhận diện dấu đỏ.",
         )
 
     labels = [
@@ -832,23 +1212,35 @@ def detect_question_red_mark(
     if not labels:
         raise HTTPException(
             422,
-            "Câu hỏi này chưa có lựa chọn để đối chiếu dấu đỏ.",
+            "Câu hỏi này chưa có các lựa chọn "
+            "để đối chiếu dấu đỏ.",
         )
 
     config = RedMarkConfig.from_environment()
-    cached = question.get("red_mark_detection")
+
+    cached = question.get(
+        "red_mark_detection"
+    )
 
     if (
         not force
         and cached
-        and cached["config_fingerprint"] == config.fingerprint
+        and cached["config_fingerprint"]
+        == config.fingerprint
     ):
         return {
             "success": True,
-            "data": cached | {"cached": True},
+            "data": cached | {
+                "cached": True,
+            },
         }
 
-    raw_pages = _exam_ocr_pages(exam)
+    raw_pages = (
+        exam.get("extra", {})
+        .get("ocr_response", {})
+        .get("pages", [])
+    )
+
     page_index = max(
         0,
         (question.get("page_number") or 1) - 1,
@@ -856,25 +1248,28 @@ def detect_question_red_mark(
 
     page_ocr = (
         raw_pages[page_index]
-        if (
-            page_index < len(raw_pages)
-            and isinstance(raw_pages[page_index], dict)
+        if page_index < len(raw_pages)
+        and isinstance(
+            raw_pages[page_index],
+            dict,
         )
         else None
     )
 
     try:
-        result = detect_red_mark_pdf(
-            pdf_path,
-            question.get(
-                "source_question_number",
-                question["question_id"],
-            ),
-            question.get("page_number"),
-            labels,
-            page_ocr=page_ocr,
-            config=config,
-        )
+        with PDF_LOCK:
+            result = detect_red_mark_pdf(
+                pdf_path,
+                question.get(
+                    "source_question_number",
+                    question["question_id"],
+                ),
+                question.get("page_number"),
+                labels,
+                page_ocr=page_ocr,
+                config=config,
+            )
+
     except Exception as exc:
         raise HTTPException(
             422,
@@ -894,19 +1289,28 @@ def detect_question_red_mark(
 
     return {
         "success": True,
-        "data": saved | {"cached": False},
+        "data": saved | {
+            "cached": False,
+        },
     }
 
 
-@app.patch("/api/questions/{question_record_id}/red-mark-confirmation")
+@app.patch(
+    "/api/questions/{question_record_id}/red-mark-confirmation"
+)
 def confirm_question_red_mark(
     question_record_id: str,
     payload: RedAnswerConfirmation,
 ):
-    found = db.get_question_record(question_record_id)
+    found = db.get_question_record(
+        question_record_id
+    )
 
     if not found:
-        raise HTTPException(404, "Không tìm thấy câu hỏi.")
+        raise HTTPException(
+            404,
+            "Không tìm thấy câu hỏi.",
+        )
 
     result = db.confirm_red_answer(
         question_record_id,

@@ -57,7 +57,7 @@ type ApiEnvelope = {
     message?: string;
 };
 
-const API = "http://127.0.0.1:8000/api/parser-preview";
+const API = (import.meta.env.VITE_PARSER_PREVIEW_API_URL || "http://127.0.0.1:8001/api/parser-preview").replace(/\/+$/, "");
 
 function blockText(blocks: TextBlock[] = []): string {
     return blocks.map((item) => item.value ?? "").join("\n");
