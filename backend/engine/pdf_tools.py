@@ -128,7 +128,7 @@ class RedMarkConfig:
     @property
     def fingerprint(self) -> str:
         payload = {
-            "algorithm_version": 3,
+            "algorithm_version": 5,
             **asdict(self),
         }
 
@@ -494,6 +494,8 @@ def detect_red_mark_pdf(
     option_labels: list[str],
     page_ocr: dict[str, Any] | None = None,
     config: RedMarkConfig | None = None,
+    *,
+    detail_page_ocr: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 
     config = (
@@ -545,7 +547,21 @@ def detect_red_mark_pdf(
             if label in located["options"]
         }
 
-        if not available:
+        from .option_mark_evidence import (
+            enclosed_anchor_hits,
+            paddle_recognition_items,
+            paddle_mark_suggestion,
+        )
+
+        anchors = located.get("option_anchors") or {}
+        source = located.get("option_anchor_source", "none")
+        evidence = detail_page_ocr if detail_page_ocr is not None else page_ocr
+        scan_fallback = (
+            not available and not anchors
+            and located["source"] in {"paddleocr", "paddleocr_inferred"}
+            and bool(paddle_recognition_items(page, evidence))
+        )
+        if not available and not anchors and not scan_fallback:
             return base
 
         stat = Path(pdf_path).stat()
@@ -564,6 +580,70 @@ def detect_red_mark_pdf(
         )
 
         scale = config.dpi / 72
+
+        hits = enclosed_anchor_hits(
+            anchors,
+            located["bbox"],
+            option_labels,
+            components,
+            scale,
+            config.min_red_pixels,
+        )
+
+        if len(hits) > 1:
+            return base
+
+        if hits:
+
+            label, box = hits[0]
+
+            complete = (
+                set(anchors) == set(option_labels)
+                and len(set(option_labels)) >= 2
+            )
+
+            trusted = (
+                complete
+                and source == "native_words"
+            )
+
+            score = 0.85 if trusted else 0.60
+
+            if score < config.medium_confidence:
+                return base
+
+            return {
+                **base,
+                "detected_answer": label,
+                "confidence": score,
+                "status": (
+                    "detected"
+                    if trusted and score >= config.high_confidence
+                    else "uncertain"
+                ),
+                "mark_coordinates": [
+                    round(value, 2)
+                    for value in box
+                ],
+            }
+
+        if scan_fallback:
+            inferred = paddle_mark_suggestion(
+                page, question_number, located, page_ocr, detail_page_ocr,
+                option_labels, components, scale, config.min_red_pixels,
+            )
+            if inferred and config.medium_confidence <= 0.60:
+                label, box = inferred
+                return {
+                    **base,
+                    "detected_answer": label,
+                    "confidence": 0.60,
+                    "status": "uncertain",
+                    "mark_coordinates": [round(value, 2) for value in box],
+                }
+
+        if not available:
+            return base
 
         candidate_scores: dict[
             str,
