@@ -175,7 +175,11 @@ class ScopedUploadJobs:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.cloud_jobs = ScopedUploadJobs()
+    if os.getenv("VERCEL"):
+        app.state.cloud_jobs = ScopedUploadJobs()
+    else:
+        from .durable_upload_jobs import DurableUploadJobs
+        app.state.cloud_jobs = await run_in_threadpool(DurableUploadJobs)
 
     try:
         yield
