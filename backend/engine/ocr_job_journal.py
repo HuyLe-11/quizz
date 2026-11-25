@@ -19,6 +19,8 @@ DEFAULT_PATH = (
     / "data" / "storage" / "ocr-journal" / "jobs.sqlite3"
 )
 
+MAX_RESULT_BYTES = 16 * 1024 * 1024
+
 
 class JournalStateError(RuntimeError):
     """The requested state transition is not safe."""
@@ -43,17 +45,10 @@ def upload_scope(
     model: str,
     plan_fingerprint: str,
 ) -> str:
-
-    if not re.fullmatch(
-        r"[0-9a-f]{64}",
-        source_sha256,
-    ):
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
         raise ValueError("Invalid PDF SHA-256")
 
-    if not re.fullmatch(
-        r"[0-9a-f]{64}",
-        plan_fingerprint,
-    ):
+    if not re.fullmatch(r"[0-9a-f]{64}", plan_fingerprint):
         raise ValueError("Invalid OCR plan fingerprint")
 
     if not filename.strip() or not model.strip():
@@ -89,14 +84,10 @@ class OCRJobJournal:
         scope: str,
         path: Path = DEFAULT_PATH,
     ):
-        if not re.fullmatch(
-            r"[0-9a-f]{64}",
-            scope,
-        ):
+        if not re.fullmatch(r"[0-9a-f]{64}", scope):
             raise ValueError("Invalid upload scope")
 
         self.scope = scope
-
         self.path = Path(path)
 
         self.path.parent.mkdir(
@@ -146,6 +137,32 @@ class OCRJobJournal:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_results (
+                    scope TEXT NOT NULL,
+                    batch_key TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    payload BLOB NOT NULL,
+                    sha256 TEXT NOT NULL,
+
+                    PRIMARY KEY (
+                        scope,
+                        batch_key
+                    ),
+
+                    FOREIGN KEY (
+                        scope,
+                        batch_key
+                    )
+                    REFERENCES ocr_jobs (
+                        scope,
+                        batch_key
+                    )
+                    ON DELETE CASCADE
+                )
+            """)
+
         if os.name != "nt":
             self.path.chmod(0o600)
 
@@ -159,14 +176,11 @@ class OCRJobJournal:
             )
         ) as conn:
 
-            conn.execute(
-                "PRAGMA synchronous=FULL"
-            )
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA synchronous=FULL")
 
             with conn:
-                conn.execute(
-                    "BEGIN IMMEDIATE"
-                )
+                conn.execute("BEGIN IMMEDIATE")
 
                 yield conn
 
@@ -209,10 +223,7 @@ class OCRJobJournal:
             WHERE scope = ?
               AND batch_key = ?
             """,
-            (
-                self.scope,
-                key,
-            ),
+            (self.scope, key),
         ).fetchone()
 
         return JobRecord(*row) if row else None
@@ -222,24 +233,13 @@ class OCRJobJournal:
         self,
         key: str,
     ) -> Reservation:
-        """
-        Reserve before POST.
-
-        Existing submitting rows must not be retried.
-        """
+        """Reserve before POST; do not retry unknown submissions."""
 
         with self._transaction() as conn:
-
-            record = self._read(
-                conn,
-                key,
-            )
+            record = self._read(conn, key)
 
             if record is not None:
-                return Reservation(
-                    False,
-                    record,
-                )
+                return Reservation(False, record)
 
             claim = uuid4().hex
 
@@ -290,11 +290,7 @@ class OCRJobJournal:
             )
 
         with self._transaction() as conn:
-
-            current = self._read(
-                conn,
-                key,
-            )
+            current = self._read(conn, key)
 
             if (
                 current is None
@@ -305,7 +301,6 @@ class OCRJobJournal:
                 )
 
             if current.state != "submitting":
-
                 if current.job_id == job_id:
                     return
 
@@ -338,23 +333,12 @@ class OCRJobJournal:
         *,
         failed: bool = False,
     ) -> None:
-        """
-        Complete only after validation,
-        or record explicit provider failure.
-        """
+        """Record a validated terminal job state."""
 
-        target = (
-            "failed"
-            if failed
-            else "completed"
-        )
+        target = "failed" if failed else "completed"
 
         with self._transaction() as conn:
-
-            current = self._read(
-                conn,
-                key,
-            )
+            current = self._read(conn, key)
 
             if (
                 current is None
@@ -394,13 +378,9 @@ class OCRJobJournal:
         key: str,
         claim_id: str,
     ) -> None:
-        """
-        Only call after proving that no submission
-        reached the provider.
-        """
+        """Only release a submission proven not to have connected."""
 
         with self._transaction() as conn:
-
             cursor = conn.execute(
                 """
                 DELETE FROM ocr_jobs
@@ -420,3 +400,213 @@ class OCRJobJournal:
                 raise JournalStateError(
                     "Cannot release OCR submission claim"
                 )
+
+
+    @staticmethod
+    def _valid_result(
+        pages,
+        info,
+        page_count,
+    ):
+        return (
+            isinstance(pages, list)
+            and len(pages) == page_count
+            and all(
+                isinstance(page, dict)
+                for page in pages
+            )
+            and isinstance(info, dict)
+        )
+
+
+    def finish_with_result(
+        self,
+        key,
+        claim_id,
+        job_id,
+        pages,
+        info,
+        *,
+        page_count: int,
+    ) -> bool:
+        """
+        Commit result and completed state atomically.
+
+        Oversized results are not cached; their provider
+        Job IDs remain reusable.
+        """
+
+        if not self._valid_result(
+            pages,
+            info,
+            page_count,
+        ):
+            raise ValueError(
+                "Invalid OCR batch result"
+            )
+
+        payload = json.dumps(
+            {
+                "version": 1,
+                "pages": pages,
+                "data_info": info,
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        cacheable = len(payload) <= MAX_RESULT_BYTES
+
+        with self._transaction() as conn:
+            current = self._read(conn, key)
+
+            if (
+                current is None
+                or current.claim_id != claim_id
+                or current.job_id != job_id
+                or current.state not in (
+                    "accepted",
+                    "completed",
+                )
+            ):
+                raise JournalStateError(
+                    "Invalid OCR result transition"
+                )
+
+            if cacheable:
+                conn.execute(
+                    """
+                    INSERT INTO ocr_results (
+                        scope,
+                        batch_key,
+                        claim_id,
+                        job_id,
+                        payload,
+                        sha256
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+
+                    ON CONFLICT(scope, batch_key)
+                    DO UPDATE SET
+                        claim_id = excluded.claim_id,
+                        job_id = excluded.job_id,
+                        payload = excluded.payload,
+                        sha256 = excluded.sha256
+                    """,
+                    (
+                        self.scope,
+                        key,
+                        claim_id,
+                        job_id,
+                        payload,
+                        hashlib.sha256(
+                            payload
+                        ).hexdigest(),
+                    ),
+                )
+
+            else:
+                conn.execute(
+                    """
+                    DELETE FROM ocr_results
+                    WHERE scope = ?
+                      AND batch_key = ?
+                    """,
+                    (self.scope, key),
+                )
+
+            conn.execute(
+                """
+                UPDATE ocr_jobs
+                SET state = 'completed',
+                    updated_at = ?
+                WHERE scope = ?
+                  AND batch_key = ?
+                """,
+                (
+                    time.time(),
+                    self.scope,
+                    key,
+                ),
+            )
+
+        return cacheable
+
+
+    def load_result(
+        self,
+        key,
+        claim_id,
+        job_id,
+        *,
+        page_count: int,
+    ):
+        """Return validated cached data or None."""
+
+        with self._transaction() as conn:
+            current = self._read(conn, key)
+
+            if (
+                current is None
+                or current.state != "completed"
+                or current.claim_id != claim_id
+                or current.job_id != job_id
+            ):
+                return None
+
+            row = conn.execute(
+                """
+                SELECT payload, sha256
+                FROM ocr_results
+                WHERE scope = ?
+                  AND batch_key = ?
+                  AND claim_id = ?
+                  AND job_id = ?
+                  AND typeof(payload) = 'blob'
+                  AND length(payload) <= ?
+                """,
+                (
+                    self.scope,
+                    key,
+                    claim_id,
+                    job_id,
+                    MAX_RESULT_BYTES,
+                ),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        payload, digest = row
+
+        if hashlib.sha256(payload).hexdigest() != digest:
+            return None
+
+        try:
+            value = json.loads(payload)
+
+        except (
+            ValueError,
+            UnicodeError,
+            RecursionError,
+        ):
+            return None
+
+        if (
+            not isinstance(value, dict)
+            or value.get("version") != 1
+        ):
+            return None
+
+        pages = value.get("pages")
+        info = value.get("data_info")
+
+        if not self._valid_result(
+            pages,
+            info,
+            page_count,
+        ):
+            return None
+
+        return pages, info
