@@ -42,8 +42,7 @@ def done(job_id):
         "data": {
             "state": "done",
             "resultUrl": {
-                "jsonUrl":
-                    f"https://storage.example/{job_id}",
+                "jsonUrl": f"https://storage.example/{job_id}",
             },
         },
     }
@@ -92,13 +91,9 @@ class ResilientOCRTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
 
-        self.addCleanup(
-            tmp.cleanup
-        )
+        self.addCleanup(tmp.cleanup)
 
-        self.path = (
-            Path(tmp.name) / "exam.pdf"
-        )
+        self.path = Path(tmp.name) / "exam.pdf"
 
         with pymupdf.open() as doc:
             for i in range(3):
@@ -137,6 +132,9 @@ class ResilientOCRTests(unittest.TestCase):
                     "PADDLEOCR_RECOVERY_TIMEOUT":
                         "120",
 
+                    "PADDLEOCR_SUBMIT_MAX_ATTEMPTS":
+                        "2",
+
                     "PADDLEOCR_EMPTY_TEXT_FALLBACK_MODEL":
                         "PP-OCRv6",
                 },
@@ -160,9 +158,7 @@ class ResilientOCRTests(unittest.TestCase):
     def start_patch(self, patcher):
         value = patcher.start()
 
-        self.addCleanup(
-            patcher.stop
-        )
+        self.addCleanup(patcher.stop)
 
         return value
 
@@ -182,13 +178,9 @@ class ResilientOCRTests(unittest.TestCase):
             client.PaddleOCRTimeoutError(
                 "deadline"
             ),
-
             done("j1"),
-
             result("one", "two"),
-
             done("j2"),
-
             result("three"),
         ]
 
@@ -351,15 +343,16 @@ class ResilientOCRTests(unittest.TestCase):
             self.get.call_args_list[2].kwargs,
         )
 
-    def test_post_timeout_not_retried(self):
+    def test_post_read_timeout_not_retried(self):
         self.post.side_effect = (
-            requests.exceptions.ConnectTimeout(
+            requests.exceptions.ReadTimeout(
                 "submit"
             )
         )
 
-        with self.assertRaises(
-            client.PaddleOCRTimeoutError
+        with self.assertRaisesRegex(
+            client.PaddleOCRTimeoutError,
+            "read_timeout.*outcome unknown",
         ):
             self.recognize()
 

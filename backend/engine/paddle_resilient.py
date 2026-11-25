@@ -1,4 +1,4 @@
-"""Cloud OCR with bounded recovery and geometry-preserving VL requests."""
+"""Cloud OCR with bounded submission and polling recovery."""
 from __future__ import annotations
 
 import json
@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import requests
+from urllib3.exceptions import ReadTimeoutError
 
 from . import paddle_client as client
 
@@ -70,9 +71,11 @@ def _recoverable(error: Exception) -> bool:
     cause = error.__cause__
 
     return isinstance(
-        cause, requests.exceptions.ConnectionError
+        cause,
+        requests.exceptions.ConnectionError,
     ) and not isinstance(
-        cause, requests.exceptions.SSLError
+        cause,
+        requests.exceptions.SSLError,
     )
 
 
@@ -175,6 +178,302 @@ def _poll(
         interval = min(interval * 1.5, 15.0)
 
 
+def _submit_attempts() -> int:
+    raw = os.getenv(
+        "PADDLEOCR_SUBMIT_MAX_ATTEMPTS",
+        "2",
+    )
+
+    try:
+        attempts = int(raw)
+
+    except ValueError as exc:
+        raise ValueError(
+            "PADDLEOCR_SUBMIT_MAX_ATTEMPTS "
+            "must be 1, 2 or 3."
+        ) from exc
+
+    if attempts not in (1, 2, 3):
+        raise ValueError(
+            "PADDLEOCR_SUBMIT_MAX_ATTEMPTS "
+            "must be 1, 2 or 3."
+        )
+
+    return attempts
+
+
+def _submission_error_kind(
+    error: BaseException,
+) -> str:
+    # Only a direct ConnectTimeout is eligible
+    # for automatic retry.
+    if isinstance(
+        error,
+        requests.exceptions.ConnectTimeout,
+    ):
+        return "connect_timeout"
+
+    pending = [error]
+    seen = set()
+
+    write_timeout = False
+    read_timeout = False
+
+    while pending:
+        item = pending.pop()
+
+        if id(item) in seen:
+            continue
+
+        seen.add(id(item))
+
+        if isinstance(
+            item,
+            (
+                requests.exceptions.ReadTimeout,
+                ReadTimeoutError,
+            ),
+        ):
+            read_timeout = True
+
+        if isinstance(item, BaseException):
+            pending.extend([
+                item.__cause__,
+                item.__context__,
+                *item.args,
+            ])
+
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+
+        elif isinstance(item, str):
+            if "write operation timed out" in item.lower():
+                write_timeout = True
+
+    if write_timeout:
+        return "write_timeout"
+
+    if read_timeout:
+        return "read_timeout"
+
+    if client._nested_timeout(error):
+        return "unknown_timeout"
+
+    return "transport_error"
+
+
+def _submit_job(
+    batch,
+    *,
+    model,
+    job_url,
+    headers,
+    timeout,
+) -> str:
+    attempts = _submit_attempts()
+
+    upload_timeout = client._upload_timeout(
+        timeout[1]
+    )
+
+    payload = _optional_payload(model)
+
+    logger.info(
+        "paddleocr:submit_options model=%s options=%s",
+        model,
+        json.dumps(payload),
+    )
+
+    for attempt in range(1, attempts + 1):
+
+        started = time.monotonic()
+
+        logger.info(
+            "paddleocr:submit status=started "
+            "model=%s first_page=%d "
+            "attempt=%d/%d socket_timeout=%.1f "
+            "read_timeout=%.1f",
+            model,
+            batch.start_page + 1,
+            attempt,
+            attempts,
+            *upload_timeout,
+        )
+
+        # Open the file again on every attempt.
+        # Reusing an exhausted file may upload
+        # an empty or incomplete PDF.
+        try:
+            with batch.path.open("rb") as pdf:
+
+                response = requests.post(
+                    job_url,
+                    headers=headers,
+                    data={
+                        "model": model,
+                        "optionalPayload": json.dumps(
+                            payload
+                        ),
+                    },
+                    files={
+                        "file": (
+                            batch.path.name,
+                            pdf,
+                            "application/pdf",
+                        ),
+                    },
+                    timeout=upload_timeout,
+
+                    # Avoid implicit POST resubmission
+                    # through HTTP 307/308 redirects.
+                    allow_redirects=False,
+                )
+
+        except (
+            requests.RequestException,
+            TimeoutError,
+        ) as exc:
+
+            kind = _submission_error_kind(exc)
+
+            can_retry = (
+                kind == "connect_timeout"
+                and attempt < attempts
+            )
+
+            outcome = (
+                "not_connected"
+                if kind == "connect_timeout"
+                else "unknown"
+            )
+
+            logger.warning(
+                "paddleocr:submit status=failed "
+                "kind=%s outcome=%s retry=%s "
+                "attempt=%d/%d first_page=%d "
+                "elapsed=%.2f error_type=%s",
+                kind,
+                outcome,
+                can_retry,
+                attempt,
+                attempts,
+                batch.start_page + 1,
+                time.monotonic() - started,
+                type(exc).__name__,
+            )
+
+            if can_retry:
+                delay = float(
+                    2 ** (attempt - 1)
+                )
+
+                logger.info(
+                    "paddleocr:submit "
+                    "status=backoff delay=%.1f",
+                    delay,
+                )
+
+                time.sleep(delay)
+
+                continue
+
+            if kind == "connect_timeout":
+                raise client.PaddleOCRTimeoutError(
+                    "PaddleOCR connection timed out "
+                    "during PDF upload."
+                ) from exc
+
+            if kind.endswith("timeout"):
+                raise client.PaddleOCRTimeoutError(
+                    f"PaddleOCR PDF upload {kind}; "
+                    "submission outcome unknown. "
+                    "Automatic resubmission disabled."
+                ) from exc
+
+            raise RuntimeError(
+                "PaddleOCR PDF upload transport error; "
+                "submission outcome unknown. "
+                "Automatic resubmission disabled."
+            ) from exc
+
+        status = response.status_code
+
+        if (
+            isinstance(status, int)
+            and 300 <= status < 400
+        ):
+            logger.warning(
+                "paddleocr:submit "
+                "status=redirect_blocked "
+                "http=%d retry=False",
+                status,
+            )
+
+            raise client.PaddleOCRAPIError(
+                "submit",
+                status,
+            )
+
+        if not response.ok:
+            logger.warning(
+                "paddleocr:submit "
+                "status=http_error "
+                "http=%s retry=False",
+                status,
+            )
+
+            client._check_response(
+                response,
+                "submit",
+            )
+
+        try:
+            data = response.json()
+
+        except ValueError as exc:
+            logger.warning(
+                "paddleocr:submit status=invalid_json "
+                "outcome=unknown retry=False"
+            )
+
+            raise RuntimeError(
+                "PaddleOCR returned invalid submission JSON; "
+                "submission outcome unknown."
+            ) from exc
+
+        result = (
+            data.get("data")
+            if isinstance(data, dict)
+            else None
+        )
+
+        job_id = (
+            result.get("jobId")
+            if isinstance(result, dict)
+            else None
+        )
+
+        if (
+            type(job_id) not in (str, int)
+            or not str(job_id).strip()
+        ):
+            logger.warning(
+                "paddleocr:submit status=missing_job_id "
+                "outcome=unknown retry=False"
+            )
+
+            raise RuntimeError(
+                "PaddleOCR did not return a job ID; "
+                "submission outcome unknown."
+            )
+
+        return str(job_id)
+
+    raise AssertionError(
+        "Unreachable OCR submission state"
+    )
+
+
 def _process_batch(
     batch,
     *,
@@ -186,74 +485,17 @@ def _process_batch(
     recovery,
     result_timeout,
 ):
-    payload = _optional_payload(model)
+    job_id = _submit_job(
+        batch,
+        model=model,
+        job_url=job_url,
+        headers=headers,
+        timeout=timeout,
+    )
 
     logger.info(
-        "paddleocr:submit_options model=%s options=%s",
-        model,
-        json.dumps(payload),
-    )
-
-    # Submit exactly once; POST timeouts must not
-    # cause duplicate OCR jobs.
-    try:
-        with batch.path.open("rb") as pdf:
-            response = requests.post(
-                job_url,
-                headers=headers,
-                data={
-                    "model": model,
-                    "optionalPayload": json.dumps(payload),
-                },
-                files={
-                    "file": (
-                        batch.path.name,
-                        pdf,
-                        "application/pdf",
-                    ),
-                },
-                timeout=client._upload_timeout(
-                    timeout[1]
-                ),
-            )
-
-    except (
-        requests.RequestException,
-        TimeoutError,
-    ) as exc:
-        client._request_error(
-            exc,
-            "PDF upload",
-        )
-
-    client._check_response(
-        response,
-        "submit",
-    )
-
-    data = response.json()
-
-    result = (
-        data.get("data")
-        if isinstance(data, dict)
-        else None
-    )
-
-    job_id = (
-        result.get("jobId")
-        if isinstance(result, dict)
-        else None
-    )
-
-    if not job_id:
-        raise RuntimeError(
-            "PaddleOCR did not return a job ID."
-        )
-
-    job_id = str(job_id)
-
-    logger.info(
-        "paddleocr:upload status=completed job=%s first_page=%d",
+        "paddleocr:upload status=completed "
+        "job=%s first_page=%d",
         job_id,
         batch.start_page + 1,
     )
@@ -304,8 +546,7 @@ def _process_batch(
         model,
     )
 
-    # Log actual metadata. Never replace server geometry
-    # flags with requested values.
+    # Preserve actual metadata returned by PaddleOCR.
     _log_geometry(
         pages,
         job_id,
@@ -318,7 +559,9 @@ def recognize_pdf(
     path: str,
     model: str,
 ) -> tuple[str, dict[str, Any]]:
-    token = os.getenv("PADDLEOCR_ACCESS_TOKEN")
+    token = os.getenv(
+        "PADDLEOCR_ACCESS_TOKEN"
+    )
 
     if not token:
         raise RuntimeError(
@@ -355,8 +598,8 @@ def recognize_pdf(
 
     if recovery > 300:
         raise ValueError(
-            "PADDLEOCR_RECOVERY_TIMEOUT must not "
-            "exceed 300 seconds."
+            "PADDLEOCR_RECOVERY_TIMEOUT "
+            "must not exceed 300 seconds."
         )
 
     max_pages = int(
@@ -407,6 +650,7 @@ def recognize_pdf(
     with tempfile.TemporaryDirectory(
         prefix="quizpdf-ocr-"
     ) as directory:
+
         workdir = Path(directory)
 
         normalized, converted = (
