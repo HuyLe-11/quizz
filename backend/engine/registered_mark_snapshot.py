@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 import pymupdf
 
 from .ocr_image_cache import OCRImageCache
+from .registered_ocr_context import geometry_page_for
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +207,7 @@ def collect_registered_marks(
                 ):
                     continue
 
-                root = selected.get(
-                    "pruned_result"
-                )
+                root = geometry_page_for(selected).get("pruned_result")
 
                 if (
                     not isinstance(root, dict)

@@ -17,7 +17,11 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from . import paddle_client as client
-from .registered_ocr_context import remember_completed_batch
+from .registered_ocr_context import (
+    remember_completed_batch,
+    remember_supplemental_batch,
+    supplemental_candidates,
+)
 
 from .ocr_job_journal import (
     DEFAULT_PATH,
@@ -842,6 +846,7 @@ def recognize_pdf(
         request_timeout,
     )
 
+    supplemental_attempted = False
     all_pages = []
     jobs = []
     data_info = {}
@@ -985,6 +990,7 @@ def recognize_pdf(
                     )
 
             used_fallback = False
+            supplemental_pages = None
 
             try:
                 job_id, pages, info = run(model)
@@ -1047,6 +1053,7 @@ def recognize_pdf(
                 )
 
                 check_count(other_pages)
+                supplemental_pages = other_pages
 
                 if len(other_pages) != len(pages):
                     raise RuntimeError(
@@ -1067,6 +1074,27 @@ def recognize_pdf(
                     "job_id": other_job,
                     "model": alternate,
                 })
+
+            # Geometry-only OCR: never replace primary text or alter raw history.
+            if journal is not None and model == "PaddleOCR-VL-1.6":
+                offsets = supplemental_candidates(path, batch, pages, converted)
+                if offsets:
+                    try:
+                        if supplemental_pages is None and not supplemental_attempted:
+                            supplemental_attempted = True
+                            logger.info("paddleocr:supplemental status=started first_page=%d", batch.start_page + 1)
+                            _, supplemental_pages, _ = run("PP-OCRv6")
+                            check_count(supplemental_pages)
+                        if supplemental_pages is not None:
+                            linked = remember_supplemental_batch(
+                                journal, batch, pages, supplemental_pages, offsets,
+                            )
+                            logger.info("paddleocr:supplemental status=completed linked=%d", linked)
+                    except Exception as exc:
+                        # Optional evidence must not fail the primary OCR.
+                        # Never retry an ambiguous submission outside the journal.
+                        supplemental_attempted = True
+                        logger.warning("paddleocr:supplemental status=unavailable type=%s", type(exc).__name__)
 
             if len(batches) > 1:
 
