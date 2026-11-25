@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from .ocr_option_recovery import recover_four_options
+
 QUESTION_START = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*"
     r"(?:Câu(?:\s+hỏi|\s+số)?|Cau(?:\s+hoi|\s+so)?|Question|Q)\s*"
@@ -32,6 +34,7 @@ INLINE_OPTION = re.compile(
 SECTION_START = re.compile(
     r"^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:"
     r"Mark\s+the\s+letter\b|Read\s+the\s+(?:following\s+)?(?:passage|text)\b|"
+    r"(?:Question\s+[IVXLCDM]+\s*[.:-]\s*)?Choose\s+the\s+letter\b|"
     r"Choose\s+the\s+(?:best|correct)\b|Select\s+the\s+(?:best|correct)\b|"
     r"Identify\s+the\b|Chọn\s+(?:đáp\s+án|câu|phương\s+án)\b|"
     r"Đọc\s+(?:đoạn|bài)\b)", re.I,
@@ -207,6 +210,11 @@ def _inline_options(
 ) -> tuple[str, list[dict[str, str]]]:
     matches = list(INLINE_OPTION.finditer(line))
 
+    if expected_first == "A" and len(matches) < 4:
+        recovered = recover_four_options(line)
+        if recovered is not None:
+            return recovered
+
     if len(matches) < 2:
         return line, []
 
@@ -313,6 +321,7 @@ def _starts_complete_option_restart(
 
 
 def _new_section(start: str) -> dict:
+    start = re.sub(r"^\s*#{1,6}\s+", "", start).strip()
     return {
         "instruction": start,
         "passage": [],
@@ -405,6 +414,16 @@ def _finish_question(item: dict, slug: str) -> dict:
             and not has_underline_markers
         )
     )
+
+    if (
+        re.search(r"underlined\s+part\s+is\s+pronounced", instruction, re.I)
+        and len(choices) == 4
+        and any(
+            not re.search(r"\\underline|<u(?:\s[^>]*)?>|\u0332", choice["text"], re.I)
+            for choice in choices
+        )
+    ):
+        requires_source_image = True
 
     asks_for_four = bool(
         re.search(
