@@ -448,23 +448,28 @@ def recover_scan_blanks(
                     "question_content"
                 )
 
-                if (
-                    not isinstance(blocks, list)
-
-                    or len(blocks) != 1
-
-                    or not isinstance(
-                        blocks[0],
-                        dict,
-                    )
-
-                    or blocks[0].get("type") != "text"
-                ):
+                if not isinstance(blocks, list):
+                    continue
+                context = [
+                    q.get(key, "")
+                    for key in ("section_instruction", "shared_passage")
+                    if q.get(key, "")
+                ]
+                # Accept only the exact context prefix emitted by the shared parser.
+                # Never edit the instruction or shared passage.
+                if len(blocks) == 1:
+                    stem_block = blocks[0]
+                elif (len(blocks) == len(context) + 1 and context
+                      and all(isinstance(block, dict) and block.get("type") == "text"
+                              and block.get("value") == value
+                              for block, value in zip(blocks, context))):
+                    stem_block = blocks[-1]
+                else:
+                    continue
+                if not isinstance(stem_block, dict) or stem_block.get("type") != "text":
                     continue
 
-                stem = blocks[0].get(
-                    "value"
-                )
+                stem = stem_block.get("value")
 
                 if (
                     not isinstance(stem, str)
@@ -555,11 +560,7 @@ def recover_scan_blanks(
                 ):
                     continue
 
-                blocks[0]["value"] = (
-                    left
-                    + " ________ "
-                    + right
-                )
+                stem_block["value"] = left + " ________ " + right
 
                 q["requires_source_image"] = True
 

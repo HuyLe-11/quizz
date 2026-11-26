@@ -251,15 +251,21 @@ def _suffix_repairs(question, options, row):
 
             continue
 
-        if block.get("type") != "latex":
+        if block.get("type") not in ("latex", "text"):
             return []
 
         match = MARKED_SUFFIX.fullmatch(value)
+        if match is None and block.get("type") == "text":
+            match = re.fullmatch(
+                r"([a-z]{2,})[ \t]*((?:[a-z]\u0332){1,4})(?:[ \t]+([0-9]))?",
+                value,
+            )
 
         if not match:
             return []
 
         stem, suffix, digit = match.groups()
+        suffix = suffix.replace(LOW_LINE, "")
 
         word = stem + suffix
 
@@ -312,16 +318,13 @@ def _suffix_repairs(question, options, row):
     # No new formatting is guessed.
     # The frontend supports combining low lines.
 
-    for _, block, stem, suffix in marked:
-        block["type"] = "text"
-
-        block["value"] = (
-            stem
-            + "".join(
-                c + LOW_LINE
-                for c in suffix
-            )
-        )
+    changed = []
+    for option, block, stem, suffix in marked:
+        normalized = stem + "".join(c + LOW_LINE for c in suffix)
+        if block["type"] != "text" or block["value"] != normalized:
+            block["type"] = "text"
+            block["value"] = normalized
+            changed.append(option["label"])
 
     if annotations:
         label, digit = annotations[0]
@@ -343,10 +346,7 @@ def _suffix_repairs(question, options, row):
                 )
             )
 
-    return [
-        option["label"]
-        for option, _, _, _ in marked
-    ]
+    return changed
 
 
 def reconcile_scan_choices(
