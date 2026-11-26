@@ -29,6 +29,15 @@ SPLIT_WORD = re.compile(
     r"([A-Za-z]{2,})/([A-Za-z]{1,4})"
 )
 
+MARKED_SUFFIX = re.compile(
+    r"([a-z]{2,})[ \t]*\$[ \t]*\\underline\{([a-z]{1,4})\}"
+    r"[ \t]*\$(?:[ \t]+([0-9]))?"
+)
+
+PLAIN_WORD = re.compile(r"[a-z]{3,}")
+
+LOW_LINE = "\u0332"
+
 WARNING = (
     "Câu phát âm từ PDF scan: cần đối chiếu "
     "phần gạch chân với ảnh gốc."
@@ -36,7 +45,6 @@ WARNING = (
 
 
 def _row(root, number, labels):
-
     arrays = [
         root.get(k)
         for k in (
@@ -58,7 +66,6 @@ def _row(root, number, labels):
     entries = []
 
     for text, box, score in zip(*arrays):
-
         if not isinstance(text, str):
             return None
 
@@ -80,15 +87,12 @@ def _row(root, number, labels):
     row = {}
 
     for i in range(starts[0], len(entries)):
-
         heading, text, box, score = entries[i]
 
         if i == starts[0]:
-
             text = heading.group(2).strip()
 
         elif heading:
-
             break
 
         match = OPTION.fullmatch(text)
@@ -146,6 +150,205 @@ def _row(root, number, labels):
     return row
 
 
+def _single_block(option):
+    blocks = option.get("content")
+
+    if (
+        not isinstance(blocks, list)
+        or len(blocks) != 1
+        or not isinstance(blocks[0], dict)
+        or not isinstance(blocks[0].get("value"), str)
+    ):
+        return None
+
+    return blocks[0]
+
+
+def _split_repairs(options, row):
+    proposed = []
+
+    for option in options:
+        block = _single_block(option)
+
+        if (
+            block is None
+            or block.get("type") != "text"
+        ):
+            continue
+
+        match = SPLIT_WORD.fullmatch(
+            block["value"]
+        )
+
+        other, _, score = row[option["label"]]
+
+        if (
+            match
+            and score >= .95
+            and other == "".join(match.groups())
+        ):
+            proposed.append(
+                (
+                    option,
+                    block,
+                    other,
+                    match.group(2),
+                )
+            )
+
+    if (
+        len(proposed) < 2
+        or len({
+            s for _, _, _, s in proposed
+        }) != 1
+    ):
+        return []
+
+    for _, block, text, _ in proposed:
+        block["value"] = text
+
+    return [
+        option["label"]
+        for option, _, _, _ in proposed
+    ]
+
+
+def _suffix_repairs(question, options, row):
+    """Normalize observed suffix markup.
+
+    A trailing digit is treated as probable annotation
+    under restricted structural conditions.
+
+    This is not handwriting recognition. Do not add
+    new underlines or infer any answer.
+    """
+
+    words = []
+    marked = []
+    annotations = []
+
+    for option in options:
+        block = _single_block(option)
+
+        if block is None:
+            return []
+
+        value = block["value"]
+
+        other, _, score = row[option["label"]]
+
+        if score < .95:
+            return []
+
+        if (
+            block.get("type") == "text"
+            and PLAIN_WORD.fullmatch(value)
+        ):
+            if other != value:
+                return []
+
+            words.append(value)
+
+            continue
+
+        if block.get("type") != "latex":
+            return []
+
+        match = MARKED_SUFFIX.fullmatch(value)
+
+        if not match:
+            return []
+
+        stem, suffix, digit = match.groups()
+
+        word = stem + suffix
+
+        if other != word + (
+            " " + digit if digit else ""
+        ):
+            return []
+
+        words.append(word)
+
+        marked.append(
+            (
+                option,
+                block,
+                stem,
+                suffix,
+            )
+        )
+
+        if digit:
+            annotations.append(
+                (option["label"], digit)
+            )
+
+    # A full row of distinct single words,
+    # with the same explicitly underlined suffix
+    # in at least two choices, is required.
+
+    if (
+        len(marked) < 2
+        or len(annotations) > 1
+        or len({
+            suffix
+            for _, _, _, suffix in marked
+        }) != 1
+        or len(set(words)) != len(options)
+    ):
+        return []
+
+    suffix = marked[0][3]
+
+    if not all(
+        word.endswith(suffix)
+        and len(word) >= len(suffix) + 2
+        for word in words
+    ):
+        return []
+
+    # Preserve underlines already present in VL.
+    # No new formatting is guessed.
+    # The frontend supports combining low lines.
+
+    for _, block, stem, suffix in marked:
+        block["type"] = "text"
+
+        block["value"] = (
+            stem
+            + "".join(
+                c + LOW_LINE
+                for c in suffix
+            )
+        )
+
+    if annotations:
+        label, digit = annotations[0]
+
+        warning = (
+            f"Lựa chọn {label}: số {digit} được tách khỏi từ theo cấu trúc "
+            "câu phát âm; có thể là chú thích viết tay, cần đối chiếu PDF gốc."
+        )
+
+        previous = str(
+            question.get("parser_warning") or ""
+        )
+
+        if warning not in previous:
+            question["parser_warning"] = " ".join(
+                filter(
+                    None,
+                    (previous, warning),
+                )
+            )
+
+    return [
+        option["label"]
+        for option, _, _, _ in marked
+    ]
+
+
 def reconcile_scan_choices(
     pdf_path,
     primary_pages,
@@ -153,18 +356,17 @@ def reconcile_scan_choices(
     *,
     geometry_page_for,
 ):
-    """Mutate only verified option text and conservative review flags.
+    """Mutate option text and conservative review flags only.
 
     Geometry resolver is the upload-local registered OCR context.
-    Caller holds PDF_LOCK. No provider calls or answer updates.
+    Caller holds PDF_LOCK.
+    No provider calls or answer updates.
     """
 
     repairs = []
 
     try:
-
         with pymupdf.open(pdf_path) as doc:
-
             if len(primary_pages) != len(doc):
                 return repairs
 
@@ -195,7 +397,6 @@ def reconcile_scan_choices(
     )
 
     for q in questions:
-
         page = q.get("page_number")
 
         number = q.get(
@@ -207,12 +408,13 @@ def reconcile_scan_choices(
             type(page) is not int
             or page not in scanned
             or not INSTRUCTION.search(
-                str(q.get("section_instruction") or "")
+                str(
+                    q.get("section_instruction")
+                    or ""
+                )
             )
         ):
             continue
-
-        # Text agreement does not verify the original underline.
 
         q["requires_source_image"] = True
         q["parse_fallback"] = True
@@ -261,8 +463,6 @@ def reconcile_scan_choices(
         ):
             continue
 
-        # No independent second OCR observation.
-
         if (
             primary.get("source_page_number", page) != page
             or secondary.get("source_page_number", page) != page
@@ -274,64 +474,34 @@ def reconcile_scan_choices(
         if not isinstance(root, dict):
             continue
 
-        row = _row(root, number, labels)
+        row = _row(
+            root,
+            number,
+            labels,
+        )
 
         if row is None:
             continue
 
-        proposed = []
+        changed = _split_repairs(
+            options,
+            row,
+        )
 
-        for o in options:
-
-            blocks = o.get("content")
-
-            if (
-                not isinstance(blocks, list)
-                or len(blocks) != 1
-                or not isinstance(blocks[0], dict)
-                or blocks[0].get("type") != "text"
-            ):
-                continue
-
-            value = blocks[0].get("value")
-
-            match = (
-                SPLIT_WORD.fullmatch(value)
-                if isinstance(value, str)
-                else None
+        if not changed:
+            changed = _suffix_repairs(
+                q,
+                options,
+                row,
             )
 
-            other, _, score = row[o["label"]]
-
-            if (
-                match
-                and score >= .95
-                and other == "".join(match.groups())
-            ):
-                proposed.append(
-                    (o, other, match.group(2))
-                )
-
-        # A repeated split suffix in a pronunciation row is stronger
-        # than a single slash disagreement. Never rewrite other words.
-
-        if (
-            len(proposed) < 2
-            or len({s for _, _, s in proposed}) != 1
-        ):
+        if not changed:
             continue
-
-        for option, text, _ in proposed:
-
-            option["content"][0]["value"] = text
 
         repair = {
             "page_number": page,
             "source_question_number": number,
-            "changed_options": [
-                o["label"]
-                for o, _, _ in proposed
-            ],
+            "changed_options": changed,
         }
 
         repairs.append(repair)
@@ -341,7 +511,7 @@ def reconcile_scan_choices(
             "page=%d question=%d labels=%s",
             page,
             number,
-            repair["changed_options"],
+            changed,
         )
 
     return repairs
