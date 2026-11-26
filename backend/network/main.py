@@ -196,7 +196,7 @@ app.add_middleware(
         if origin.strip()
     ],
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.mount(
