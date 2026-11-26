@@ -31,6 +31,13 @@ from .ocr_job_journal import (
 )
 
 
+from .ocr_submission_resilience import (
+    LocalSubmissionError,
+    open_submission_file,
+    record_submission_issue,
+    report_blocked_submission,
+)
+
 logger = logging.getLogger("quizpdf")
 
 
@@ -330,7 +337,7 @@ def _submit_job(
         )
 
         try:
-            with batch.path.open("rb") as pdf:
+            with open_submission_file(batch.path) as pdf:
                 response = requests.post(
                     job_url,
                     headers=headers,
@@ -536,12 +543,16 @@ def _process_batch(
                     timeout=timeout,
                 )
 
-            except UnconnectedSubmissionError:
+            except (UnconnectedSubmissionError, LocalSubmissionError):
                 journal.release_unconnected(
                     key,
                     record.claim_id,
                 )
+                logger.info("paddleocr:journal status=unconnected_released")
+                raise
 
+            except Exception as exc:
+                record_submission_issue(journal, key, record.claim_id, exc)
                 raise
 
             try:
@@ -551,7 +562,11 @@ def _process_batch(
                     job_id,
                 )
 
-            except Exception:
+            except Exception as exc:
+                record_submission_issue(
+                    journal, key, record.claim_id, exc,
+                    stage="accept", observed_job_id=job_id,
+                )
                 logger.error(
                     "paddleocr:journal status=accept_failed job=%s",
                     job_id,
@@ -565,6 +580,7 @@ def _process_batch(
             )
 
         elif record.state == "submitting":
+            report_blocked_submission(journal, key, record.claim_id)
 
             raise JournalStateError(
                 "Previous OCR submission is unconfirmed; "
