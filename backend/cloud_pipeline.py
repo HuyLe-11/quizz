@@ -30,6 +30,7 @@ try:
     from backend.engine.registered_mark_snapshot import collect_registered_marks
     from backend.engine.registered_ocr_context import geometry_page_for
     from backend.engine.ocr_text_reconciliation import reconcile_scan_choices
+    from backend.engine.ocr_blank_recovery import recover_scan_blanks
 
     from backend.engine.parser_review_snapshot import (
         build_parser_review_snapshot,
@@ -65,6 +66,7 @@ except ModuleNotFoundError as exc:
     from engine.registered_mark_snapshot import collect_registered_marks
     from engine.registered_ocr_context import geometry_page_for
     from engine.ocr_text_reconciliation import reconcile_scan_choices
+    from engine.ocr_blank_recovery import recover_scan_blanks
 
     from engine.parser_review_snapshot import (
         build_parser_review_snapshot,
@@ -395,6 +397,12 @@ def process_cloud_pdf(
 
             with PDF_LOCK:
                 reconcile_scan_choices(
+                    pdf_path,
+                    normalized_pages,
+                    questions,
+                    geometry_page_for=geometry_page_for,
+                )
+                recover_scan_blanks(
                     pdf_path,
                     normalized_pages,
                     questions,
