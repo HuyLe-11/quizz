@@ -37,6 +37,7 @@ function SourceImagePanel({
         question.question_image_url || "",
     );
 
+    const [source, setSource] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
@@ -46,7 +47,7 @@ function SourceImagePanel({
         recordId && question.has_source_pdf !== false,
     );
 
-    async function requestImage() {
+    async function requestImage(force = false) {
         if (!recordId || !canRequest || loading) {
             return;
         }
@@ -57,7 +58,7 @@ function SourceImagePanel({
         try {
             const result = await cropQuestionImage(
                 recordId,
-                false,
+                force,
             );
 
             if (
@@ -70,6 +71,7 @@ function SourceImagePanel({
             }
 
             setImageUrl(result.image_url);
+            setSource(result.source || "");
         } catch {
             setError(
                 "Không thể tải ảnh gốc. Hãy thử lại.",
@@ -107,18 +109,35 @@ function SourceImagePanel({
                 Ảnh có thể chứa đáp án hoặc dấu chấm tay.
             </p>
 
-            {imageUrl || canRequest ? (
-                <button
-                    type="button"
-                    onClick={toggle}
-                    aria-expanded={open}
-                    className="mt-3 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-primary)]"
-                >
-                    {open
-                        ? "Ẩn ảnh gốc"
-                        : "Xem phần gạch chân trên PDF"}
-                </button>
-            ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+                {(imageUrl || canRequest) && (
+                    <button
+                        type="button"
+                        onClick={toggle}
+                        aria-expanded={open}
+                        className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-primary)]"
+                    >
+                        {open
+                            ? "Ẩn ảnh gốc"
+                            : "Xem phần gạch chân trên PDF"}
+                    </button>
+                )}
+
+                {open && canRequest && (
+                    <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => void requestImage(true)}
+                        className="rounded-md border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-primary)] disabled:opacity-50"
+                    >
+                        {loading
+                            ? "Đang xử lý..."
+                            : "Tạo lại ảnh gốc"}
+                    </button>
+                )}
+            </div>
+
+            {!imageUrl && !canRequest && (
                 <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
                     Không có ảnh PDF gốc để đối chiếu.
                 </p>
@@ -147,11 +166,27 @@ function SourceImagePanel({
                         </p>
                     )}
 
-                    {imageUrl && !error && (
+                    {source === "paddleocr_review_group" && (
+                        <p className="mb-2 text-xs text-[var(--color-text-secondary)]">
+                            Ảnh chứa một nhóm câu hỏi do các
+                            vùng văn bản gốc chồng lấn nhau.
+                            Hãy đối chiếu đúng số câu.
+                        </p>
+                    )}
+
+                    {source === "full_page_fallback" && (
+                        <p className="mb-2 text-xs text-[var(--color-text-secondary)]">
+                            Không thể xác định chính xác ranh
+                            giới câu hỏi. Đang hiển thị trang
+                            PDF gốc.
+                        </p>
+                    )}
+
+                    {imageUrl && !error && !loading && (
                         <img
                             src={imageUrl}
-                            alt={`Ảnh gốc câu ${question.question_id} gồm nội dung và các lựa chọn`}
-                            className="w-full rounded-lg border border-[var(--color-border)] bg-white object-contain"
+                            alt={`Vùng PDF gốc chứa câu ${question.question_id}`}
+                            className="block h-auto w-full rounded-lg border border-[var(--color-border)] bg-white object-contain"
                             onError={() =>
                                 setError(
                                     "Ảnh không tải được hoặc liên kết đã hết hạn.",

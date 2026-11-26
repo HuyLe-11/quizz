@@ -869,6 +869,67 @@ def locate(
     return located
 
 
+def _review_group(page, number, page_ocr, located, padding):
+    """Keep original overlapping layout blocks intact for source review.
+
+    Estimated row boundaries are suitable for locating text, not cropping it.
+    Return a shared review region, or a full-page fallback for inferred rows
+    without trustworthy block coordinates. Never modify recognition geometry.
+    """
+    if (located["source"] not in ("paddleocr", "paddleocr_inferred")
+            or located["next_start_y"] is None):
+        return None
+
+    inferred = located["source"] == "paddleocr_inferred"
+    if isinstance(page_ocr, dict) and not page.rotation:
+        for node, dimensions in _sources(page_ocr):
+            blocks = node.get("parsing_res_list")
+            if not dimensions or not isinstance(blocks, list):
+                continue
+            lines = _scale_items(page, [
+                (b.get("block_content"), bbox(b.get("block_bbox")))
+                for b in blocks if isinstance(b, dict)
+            ], dimensions)
+            headings = [line for line in lines if _headings(line)]
+            targets = [line for line in headings if number in _headings(line)]
+            if len(targets) != 1:
+                continue
+            target = targets[0]
+            top, bottom = target["bbox"][1], target["bbox"][3]
+            members = [target]
+            changed = True
+            while changed:
+                changed = False
+                for line in headings:
+                    if line in members:
+                        continue
+                    _, y0, _, y1 = line["bbox"]
+                    if y0 < bottom and y1 > top:
+                        members.append(line)
+                        top, bottom = min(top, y0), max(bottom, y1)
+                        changed = True
+            numbers = [n for line in members for n in _headings(line)]
+            if not any(len(_headings(line)) > 1 for line in members):
+                continue
+            # Do not manufacture a precise crop for mixed columns or
+            # duplicate/non-consecutive source numbers.
+            if (located["column_x"] != (0.0, page.rect.width)
+                    or sorted(numbers) != list(range(min(numbers), max(numbers) + 1))):
+                return tuple(page.rect), None
+            # Preserve a preceding overlapping instruction block too.
+            top = min([top] + [line["bbox"][1] for line in lines
+                              if not _headings(line)
+                              and line["bbox"][1] < top < line["bbox"][3]])
+            margin = max(8.0, padding)
+            rect = (page.rect.x0, max(page.rect.y0, top - margin),
+                    page.rect.x1, min(page.rect.y1, max(bottom + margin, located["bbox"][3])))
+            return rect, {**located, "source": "paddleocr_review_group"}
+
+    if inferred:
+        return tuple(page.rect), None
+    return None
+
+
 def question_segments(
     document: fitz.Document,
     number: int,
@@ -915,6 +976,15 @@ def question_segments(
         located["question_start_y"],
         located["next_start_y"],
     )
+
+    review = _review_group(
+        page, number,
+        pages[first_page] if first_page < len(pages) else None,
+        located, padding,
+    )
+    if review is not None:
+        clip, review_location = review
+        return [(first_page, clip)], review_location
 
     x0, x1 = located["column_x"]
 
