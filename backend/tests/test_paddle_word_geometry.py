@@ -71,6 +71,159 @@ class PaddleWordGeometryTests(unittest.TestCase):
             ],
         )
 
+    def test_explicit_whitespace_and_punctuation(self):
+
+        text = "Question 2. A. destroyed"
+
+        words = [
+            "Question",
+            " ",
+            "2",
+            ". ",
+            "A",
+            ". ",
+            "destroyed",
+        ]
+
+        boxes = [
+            [45, 273, 115, 295],
+            [115, 273, 120, 295],
+            [124, 273, 129, 295],
+            [133, 273, 143, 295],
+            [147, 273, 152, 295],
+            [157, 273, 166, 295],
+            [175, 273, 249, 295],
+        ]
+
+        spans = align_words(
+            text,
+            [32, 267, 255, 300],
+            words,
+            boxes,
+            size=(959, 1310),
+        )
+
+        self.assertEqual(
+            [
+                s.text
+                for s in spans
+            ],
+            words,
+        )
+
+        self.assertEqual(
+            [
+                (s.start, s.end)
+                for s in spans
+            ],
+            [
+                (0, 8),
+                (8, 9),
+                (9, 10),
+                (10, 12),
+                (12, 13),
+                (13, 15),
+                (15, 24),
+            ],
+        )
+
+        for s in spans:
+
+            self.assertEqual(
+                text[s.start:s.end],
+                s.text,
+            )
+
+    def test_mixed_explicit_and_omitted_spaces(self):
+
+        spans = align_words(
+            "  A.  x² ",
+            [0, 0, 40, 20],
+            ["A", ". ", "x²"],
+            [
+                [0, 0, 10, 20],
+                [10, 0, 20, 20],
+                [25, 0, 40, 20],
+            ],
+        )
+
+        self.assertEqual(
+            [
+                (s.start, s.end)
+                for s in spans
+            ],
+            [
+                (2, 3),
+                (3, 5),
+                (6, 8),
+            ],
+        )
+
+    def test_leading_space_token_preserved(self):
+
+        spans = align_words(
+            "a b",
+            [0, 0, 30, 20],
+            ["a", " b"],
+            [
+                [0, 0, 10, 20],
+                [10, 0, 30, 20],
+            ],
+        )
+
+        self.assertEqual(
+            (
+                spans[1].start,
+                spans[1].end,
+                spans[1].text,
+            ),
+            (1, 3, " b"),
+        )
+
+    def test_whitespace_does_not_hide_text_mismatch(self):
+
+        for words in (
+            ["a", "  ", "b"],
+            ["a", "", "b"],
+            ["a", " b!"],
+        ):
+            with self.subTest(
+                words=words
+            ), self.assertRaises(ValueError):
+
+                align_words(
+                    "a b",
+                    [0, 0, 30, 20],
+                    words,
+                    [
+                        [
+                            10 * i,
+                            0,
+                            10 * (i + 1),
+                            20,
+                        ]
+                        for i in range(len(words))
+                    ],
+                )
+
+    def test_explicit_space_box_still_validated(self):
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "overlapping_or_reversed_words",
+        ):
+
+            align_words(
+                "a b",
+                [0, 0, 30, 20],
+                ["a", " ", "b"],
+                [
+                    [0, 0, 10, 20],
+                    [5, 0, 15, 20],
+                    [20, 0, 30, 20],
+                ],
+            )
+
     def test_repeated_words(self):
 
         spans = align_words(

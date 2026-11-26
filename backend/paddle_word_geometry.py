@@ -54,7 +54,7 @@ def align_words(
     *,
     size=None,
 ):
-    """Return exact source offsets; whitespace gaps allowed, no fuzzy matching."""
+    """Preserve explicit whitespace tokens and allow omitted whitespace gaps."""
 
     if (
         not isinstance(text, str)
@@ -80,15 +80,21 @@ def align_words(
         if (
             not isinstance(word, str)
             or not word
-            or word != word.strip()
         ):
             raise ValueError("invalid_word_text")
 
-        while (
-            cursor < len(text)
-            and text[cursor].isspace()
+        # Prefer exact matching, including explicit whitespace.
+        # Only skip omitted whitespace before a token that
+        # does not begin with it.
+        if (
+            not text.startswith(word, cursor)
+            and not word[0].isspace()
         ):
-            cursor += 1
+            while (
+                cursor < len(text)
+                and text[cursor].isspace()
+            ):
+                cursor += 1
 
         if not text.startswith(word, cursor):
             raise ValueError(
