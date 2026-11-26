@@ -936,6 +936,8 @@ def question_segments(
     first_page: int,
     padding: float,
     pages: list | None = None,
+    *,
+    review_group: bool = False,
 ) -> tuple[list, dict | None]:
     if not 0 <= first_page < len(document):
         raise ValueError(
@@ -977,14 +979,15 @@ def question_segments(
         located["next_start_y"],
     )
 
-    review = _review_group(
-        page, number,
-        pages[first_page] if first_page < len(pages) else None,
-        located, padding,
-    )
-    if review is not None:
-        clip, review_location = review
-        return [(first_page, clip)], review_location
+    if review_group:
+        review = _review_group(
+            page, number,
+            pages[first_page] if first_page < len(pages) else None,
+            located, padding,
+        )
+        if review is not None:
+            clip, review_location = review
+            return [(first_page, clip)], review_location
 
     x0, x1 = located["column_x"]
 

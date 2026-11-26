@@ -218,6 +218,8 @@ def crop_question_pdf(
     output_path: str | Path,
     ocr_pages: list[dict[str, Any]] | None = None,
     config: RedMarkConfig | None = None,
+    *,
+    review_group: bool = False,
 ) -> dict[str, Any]:
 
     config = (
@@ -246,6 +248,7 @@ def crop_question_pdf(
             first_page,
             config.crop_padding_points,
             ocr_pages,
+            review_group=review_group,
         )
 
         # Select one common DPI for all segments.

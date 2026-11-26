@@ -258,6 +258,7 @@ class CloudReviewService:
                     question.get("page_number"),
                     image_path,
                     ocr_pages=self._ocr_pages(exam),
+                    review_group=True,
                 )
 
                 if (

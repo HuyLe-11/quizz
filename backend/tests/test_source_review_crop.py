@@ -1,4 +1,5 @@
 import unittest
+
 import fitz
 
 from backend.engine.pdf_layout import question_segments
@@ -15,6 +16,7 @@ class SourceReviewCropTests(unittest.TestCase):
 
     def setUp(self):
         self.doc = fitz.open()
+
         self.addCleanup(self.doc.close)
 
         self.page = self.doc.new_page(
@@ -54,19 +56,31 @@ class SourceReviewCropTests(unittest.TestCase):
             ],
         }
 
-    def locate(self, number):
+    def locate(self, number, **kwargs):
         return question_segments(
             self.doc,
             number,
             0,
             14,
-            [{"pruned_result": self.root}],
+            [
+                {
+                    "pruned_result": self.root,
+                }
+            ],
+            **kwargs,
         )
 
-    def test_merged_and_overlapping_blocks_are_preserved(self):
+    def test_merged_and_overlapping_blocks_are_preserved(
+        self,
+    ):
         for number in range(1, 5):
+
             with self.subTest(number=number):
-                segments, location = self.locate(number)
+
+                segments, location = self.locate(
+                    number,
+                    review_group=True,
+                )
 
                 self.assertEqual(
                     location["source"],
@@ -82,22 +96,85 @@ class SourceReviewCropTests(unittest.TestCase):
                                 0.0,
                                 56.0,
                                 500.0,
-                                194.0 if number < 4 else 200.0,
+                                194.0
+                                if number < 4
+                                else 200.0,
                             ),
                         )
                     ],
                 )
 
-    def test_unrelated_question_keeps_standard_crop(self):
-        _, location = self.locate(5)
+    def test_default_preserves_individual_crops(
+        self,
+    ):
+        expected = [
+            (
+                1,
+                "paddleocr_inferred",
+                118.0,
+            ),
+            (
+                2,
+                "paddleocr_inferred",
+                133.0,
+            ),
+            (
+                3,
+                "paddleocr",
+                155.0,
+            ),
+            (
+                4,
+                "paddleocr",
+                200.0,
+            ),
+        ]
 
+        for number, source, bottom in expected:
+
+            with self.subTest(number=number):
+
+                segments, location = self.locate(
+                    number
+                )
+
+                self.assertEqual(
+                    location["source"],
+                    source,
+                )
+
+                self.assertEqual(
+                    segments[0][1][3],
+                    bottom,
+                )
+
+                self.assertEqual(
+                    self.locate(
+                        number,
+                        review_group=False,
+                    ),
+                    (
+                        segments,
+                        location,
+                    ),
+                )
+
+    def test_unrelated_question_keeps_standard_crop(
+        self,
+    ):
         self.assertEqual(
-            location["source"],
-            "paddleocr",
+            self.locate(
+                5,
+                review_group=True,
+            ),
+            self.locate(5),
         )
 
-    def test_inferred_without_dimensions_falls_back(self):
+    def test_inferred_without_dimensions_falls_back(
+        self,
+    ):
         self.root.pop("width")
+
         self.root.pop("height")
 
         self.root["parsing_res_list"] = [
@@ -112,30 +189,59 @@ class SourceReviewCropTests(unittest.TestCase):
             ),
         ]
 
-        segments, location = self.locate(1)
+        segments, location = self.locate(
+            1,
+            review_group=True,
+        )
 
-        self.assertIsNone(location)
+        self.assertIsNone(
+            location
+        )
 
         self.assertEqual(
             segments,
-            [(0, tuple(self.page.rect))],
+            [
+                (
+                    0,
+                    tuple(self.page.rect),
+                )
+            ],
         )
 
-    def test_unwarped_coordinates_not_used(self):
+        self.assertEqual(
+            self.locate(1)[1]["source"],
+            "paddleocr_inferred",
+        )
+
+    def test_unwarped_coordinates_not_used(
+        self,
+    ):
         self.root["model_settings"] = {
             "use_doc_unwarping": True,
         }
 
-        segments, location = self.locate(1)
+        segments, location = self.locate(
+            1,
+            review_group=True,
+        )
 
-        self.assertIsNone(location)
+        self.assertIsNone(
+            location
+        )
 
         self.assertEqual(
             segments,
-            [(0, tuple(self.page.rect))],
+            [
+                (
+                    0,
+                    tuple(self.page.rect),
+                )
+            ],
         )
 
-    def test_native_page_unchanged(self):
+    def test_native_page_unchanged(
+        self,
+    ):
         self.page.insert_text(
             (30, 70),
             "Question 1. Native question",
@@ -151,7 +257,10 @@ class SourceReviewCropTests(unittest.TestCase):
             "Question 2. Native next question",
         )
 
-        segments, location = self.locate(1)
+        segments, location = self.locate(
+            1,
+            review_group=True,
+        )
 
         self.assertEqual(
             location["source"],
@@ -161,6 +270,14 @@ class SourceReviewCropTests(unittest.TestCase):
         self.assertLess(
             segments[0][1][3],
             150,
+        )
+
+        self.assertEqual(
+            self.locate(1),
+            (
+                segments,
+                location,
+            ),
         )
 
 

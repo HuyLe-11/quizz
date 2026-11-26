@@ -176,6 +176,7 @@ def _prepare_question(
                 question.get("page_number"),
                 output_path,
                 ocr_pages=ocr_pages,
+                review_group=True,
             )
 
         if (
