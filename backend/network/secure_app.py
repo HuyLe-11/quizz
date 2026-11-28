@@ -17,6 +17,16 @@ load_dotenv(
     Path(__file__).resolve().parents[1] / ".env"
 )
 
+try:
+    from backend.network.logging_setup import configure_quizpdf_logging
+except ModuleNotFoundError as exc:
+    if exc.name != "backend":
+        raise
+    from network.logging_setup import configure_quizpdf_logging
+
+logger = configure_quizpdf_logging()
+logger.info("app=quizpdf logger=console_ready module=%s", __file__)
+
 
 try:
     from backend.network.auth_gateway import (
@@ -154,6 +164,10 @@ app = CORSMiddleware(
     allow_headers=[
         "Authorization",
         "Content-Type",
+    ],
+
+    expose_headers=[
+        "X-Syllabus-Document-ID",
     ],
 
     allow_credentials=False,

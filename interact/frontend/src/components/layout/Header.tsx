@@ -72,6 +72,13 @@ export function Header() {
                         Lịch sử PDF
                     </Link>
 
+                    <Link
+                        to="/ai-practice"
+                        className="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text)]"
+                    >
+                        AI Practice
+                    </Link>
+
                     <span
                         title={user?.email || ""}
                         className="hidden max-w-36 truncate text-sm text-[var(--color-text)] lg:block"

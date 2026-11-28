@@ -23,6 +23,7 @@ import { StatsPage } from "./pages/StatsPage";
 import { AttemptReview } from "./pages/AttemptReview";
 import { HistoryPage } from "./pages/HistoryPage";
 import { ExamPreviewPage } from "./pages/ExamPreviewPage";
+import { AIPracticePage } from "./pages/AIPracticePage";
 
 
 import { configureAuthenticatedApi } from "./services/api";
@@ -135,6 +136,11 @@ function ApplicationRoutes() {
                         <Route
                             path="/history"
                             element={<HistoryPage />}
+                        />
+
+                        <Route
+                            path="/ai-practice"
+                            element={<AIPracticePage />}
                         />
 
                         <Route

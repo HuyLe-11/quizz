@@ -7,7 +7,9 @@ preserves verified objects so a checkpoint retry can skip completed uploads.
 import copy
 import hashlib
 import logging
+import math
 import os
+import re
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import PurePosixPath
@@ -29,6 +31,8 @@ except ModuleNotFoundError as exc:
 
 logger = logging.getLogger("quizpdf")
 BUCKET = "quizpdf-private"
+SYLLABUS_EMBEDDING_DIMENSIONS = 1536
+logger.info("app=quizpdf cloud_repository_loaded module=%s", __file__)
 
 
 class CloudRepositoryError(RuntimeError):
@@ -38,9 +42,51 @@ class CloudRepositoryError(RuntimeError):
 class CloudRepositoryHTTPError(CloudRepositoryError):
     """Supabase request failed with a response status."""
 
-    def __init__(self, status_code: int, detail: str):
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        *,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ):
         self.status_code = status_code
+        self.error_code = error_code
+        self.error_message = error_message
         super().__init__(detail)
+
+
+def _safe_error_field(value: Any, *, limit: int = 240) -> str | None:
+    """Redact common credential/value shapes before an error reaches logs."""
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"(?i)authorization\s*[:=]\s*[^\r\n]+", "Authorization: [redacted]", value)
+    text = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [redacted]", text)
+    text = re.sub(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b", "[redacted-jwt]", text)
+    text = re.sub(r"\bsb_(?:publishable|secret)_[A-Za-z0-9_-]{8,}\b", "[redacted-key]", text)
+    text = re.sub(r"\bAIza[0-9A-Za-z_-]{20,}\b", "[redacted-key]", text)
+    text = re.sub(r"(?i)(api[_ -]?key|token|password)\s*[:=]\s*[^\s,;]+", r"\1=[redacted]", text)
+    text = re.sub(r"https?://\S+", "[url-redacted]", text)
+    # Database and gateway errors can echo rejected values. Drop quoted content.
+    text = re.sub(r"'[^']*'|\"[^\"]*\"", "[value]", text)
+    text = "".join(char if char.isprintable() else " " for char in text)
+    return text[:limit] or None
+
+
+def _supabase_error_details(response: httpx.Response) -> tuple[str | None, str | None]:
+    """Extract only bounded, filtered error fields; never retain response bodies."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return None, "Non-JSON Supabase error response (body omitted)"
+    if not isinstance(payload, dict):
+        return None, "Supabase returned a non-object error (body omitted)"
+    raw_code = payload.get("code")
+    code = raw_code.strip() if isinstance(raw_code, str) else None
+    if code and not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", code):
+        code = None
+    message = _safe_error_field(payload.get("message"))
+    return code, message or "Supabase error message omitted"
 
 
 class CloudRepository:
@@ -155,10 +201,14 @@ class CloudRepository:
             return None
 
         if response.status_code >= 400:
+            error_code, error_message = _supabase_error_details(response)
             raise CloudRepositoryHTTPError(
                 response.status_code,
                 f"Supabase {method} {path} failed "
-                f"(HTTP {response.status_code}): {response.text[:400]}",
+                f"(HTTP {response.status_code}; code={error_code or 'unknown'}): "
+                f"{error_message}",
+                error_code=error_code,
+                error_message=error_message,
             )
 
         if not response.content:
@@ -181,7 +231,7 @@ class CloudRepository:
         ):
             raise ValueError("Invalid Supabase Storage object path.")
 
-        if category not in {"pdfs", "assets"}:
+        if category not in {"pdfs", "assets", "syllabi"}:
             raise ValueError("Unsupported Storage category.")
 
         return f"{self.user_id}/{category}/{relative.as_posix()}"
@@ -257,8 +307,8 @@ class CloudRepository:
         object_path: str,
         contents: bytes,
         content_type: str,
-    ) -> None:
-        """Retry a transient POST only when its outcome is verified."""
+    ) -> bool:
+        """Retry transient POSTs only when verified; return whether reused."""
         max_attempts = 3
         category = (
             "pdf"
@@ -343,7 +393,7 @@ class CloudRepository:
                         object_path,
                         attempt,
                     )
-                    return
+                    return True
 
                 if verification == "mismatched":
                     raise CloudRepositoryError(
@@ -380,7 +430,7 @@ class CloudRepository:
                     attempt,
                     time.monotonic() - started,
                 )
-                return
+                return False
 
     def _ensure_object(
         self,
@@ -418,12 +468,11 @@ class CloudRepository:
                     "already exists."
                 )
 
-        self._upload_object_resilient(
+        return self._upload_object_resilient(
             object_path,
             contents,
             content_type,
         )
-        return False
 
     @staticmethod
     def _storage_upload_workers() -> int:
@@ -580,6 +629,292 @@ class CloudRepository:
             f"/storage/v1/object/{BUCKET}",
             json_data={"prefixes": paths},
         )
+
+    @staticmethod
+    def _validated_embedding(vector: Any, *, field: str) -> list[float]:
+        if not isinstance(vector, (list, tuple)) or len(vector) != SYLLABUS_EMBEDDING_DIMENSIONS:
+            actual = len(vector) if isinstance(vector, (list, tuple)) else "invalid"
+            raise ValueError(
+                f"{field} must contain exactly {SYLLABUS_EMBEDDING_DIMENSIONS} values; got {actual}."
+            )
+        values: list[float] = []
+        for value in vector:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{field} values must be finite numbers.")
+            try:
+                number = float(value)
+            except (OverflowError, ValueError) as exc:
+                raise ValueError(f"{field} values must be finite numbers.") from exc
+            if not math.isfinite(number):
+                raise ValueError(f"{field} values must be finite numbers.")
+            values.append(number)
+        return values
+
+    def save_syllabus_bundle(
+        self,
+        document: dict[str, Any],
+        chunks: list[dict[str, Any]],
+        pdf_contents: bytes,
+        *,
+        resume_existing: bool = False,
+    ) -> dict[str, Any]:
+        """Upload a syllabus PDF and atomically persist its document/chunks.
+
+        The caller supplies a stable document UUID so an ambiguous RPC outcome
+        can be retried with ``resume_existing=True``. The database RPC is
+        idempotent for an identical bundle.
+        """
+        if not isinstance(document, dict):
+            raise ValueError("Syllabus document must be an object.")
+        if not isinstance(pdf_contents, bytes) or not pdf_contents:
+            raise ValueError("Syllabus PDF contents must be non-empty bytes.")
+        document_data = copy.deepcopy(document)
+        try:
+            document_id = str(UUID(str(document_data.get("id", ""))))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("Syllabus document id must be a UUID.") from exc
+        document_data["id"] = document_id
+        supplied_owner = document_data.pop("owner_id", self.user_id)
+        try:
+            supplied_owner = str(UUID(str(supplied_owner)))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("Syllabus owner_id must be a UUID.") from exc
+        if supplied_owner != self.user_id:
+            raise ValueError("Syllabus document is not owned by the authenticated user.")
+
+        for field in ("title", "source_file"):
+            if not isinstance(document_data.get(field), str) or not document_data[field].strip():
+                raise ValueError(f"Syllabus {field} must be a non-empty string.")
+        subject = document_data.get("subject")
+        if subject is not None and not isinstance(subject, str):
+            raise ValueError("Syllabus subject must be a string or null.")
+        metadata = document_data.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("Syllabus metadata must be an object.")
+        document_data["metadata"] = metadata
+        document_data["source_path"] = self._object_path(
+            "syllabi", f"{document_id}/{PurePosixPath(document_data['source_file']).name}"
+        )
+
+        if not isinstance(chunks, list) or not chunks:
+            raise ValueError("Syllabus bundle must contain at least one chunk.")
+        chunk_data: list[dict[str, Any]] = []
+        for expected_index, chunk in enumerate(chunks):
+            if not isinstance(chunk, dict):
+                raise ValueError("Every syllabus chunk must be an object.")
+            item = copy.deepcopy(chunk)
+            owner_id = item.pop("owner_id", self.user_id)
+            try:
+                owner_id = str(UUID(str(owner_id)))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("Syllabus chunk owner_id must be a UUID.") from exc
+            if owner_id != self.user_id:
+                raise ValueError("Syllabus chunk is not owned by the authenticated user.")
+            if item.get("chunk_index") != expected_index:
+                raise ValueError("Syllabus chunk indexes must be contiguous and start at zero.")
+            if not isinstance(item.get("content"), str) or not item["content"].strip():
+                raise ValueError("Syllabus chunk content must be non-empty text.")
+            pages = item.get("source_pages")
+            if not isinstance(pages, (list, tuple)) or not pages or any(type(p) is not int or p < 1 for p in pages):
+                raise ValueError("Syllabus chunk source_pages must contain positive page numbers.")
+            if item.get("character_count") != len(item["content"]):
+                raise ValueError("Syllabus chunk character_count does not match its content.")
+            heading = item.get("section_heading")
+            if heading is not None and not isinstance(heading, str):
+                raise ValueError("Syllabus chunk section_heading must be a string or null.")
+            token_estimate = item.get("token_estimate")
+            if token_estimate is not None and (type(token_estimate) is not int or token_estimate < 0):
+                raise ValueError("Syllabus chunk token_estimate must be a non-negative integer or null.")
+            item["source_pages"] = list(pages)
+            item["embedding"] = self._validated_embedding(
+                item.get("embedding"), field=f"chunk {expected_index} embedding"
+            )
+            chunk_metadata = item.get("metadata", {})
+            if not isinstance(chunk_metadata, dict):
+                raise ValueError("Syllabus chunk metadata must be an object.")
+            item["metadata"] = chunk_metadata
+            chunk_data.append(item)
+
+        path = document_data["source_path"]
+        # Track reused objects so a definite RPC rejection never deletes a
+        # Storage object that predated this persistence attempt.
+        logger.info(
+            "rag=syllabus stage=storage_upload status=started document_id=%s",
+            document_id,
+        )
+        try:
+            storage_reused = self._ensure_object(
+                path, pdf_contents, "application/pdf", check_existing=resume_existing
+            )
+        except Exception as exc:
+            logger.error(
+                "rag=syllabus stage=storage_upload status=failed document_id=%s "
+                "http_status=%s error_code=%s error_message=%s error_type=%s",
+                document_id,
+                getattr(exc, "status_code", None) or "none",
+                getattr(exc, "error_code", None) or "unknown",
+                _safe_error_field(getattr(exc, "error_message", None)) or "omitted",
+                type(exc).__name__,
+            )
+            raise
+        logger.info(
+            "rag=syllabus stage=storage_upload status=%s document_id=%s",
+            "reused" if storage_reused else "completed",
+            document_id,
+        )
+        logger.info(
+            "rag=syllabus stage=rpc_persist status=started document_id=%s chunks=%d",
+            document_id,
+            len(chunk_data),
+        )
+        try:
+            result = self._request(
+                "POST",
+                "/rest/v1/rpc/quizpdf_create_syllabus_bundle",
+                json_data={"p_document": document_data, "p_chunks": chunk_data},
+            )
+        except CloudRepositoryHTTPError as exc:
+            logger.error(
+                "rag=syllabus stage=rpc_persist status=failed document_id=%s "
+                "chunks=%d http_status=%d error_code=%s error_message=%s",
+                document_id,
+                len(chunk_data),
+                exc.status_code,
+                exc.error_code or "unknown",
+                _safe_error_field(exc.error_message) or "omitted",
+            )
+            if exc.status_code in {400, 401, 403, 404, 409, 422} and not storage_reused:
+                try:
+                    self._remove_objects([path])
+                except Exception as cleanup_exc:
+                    logger.error(
+                        "rag=syllabus stage=storage_cleanup status=failed document_id=%s "
+                        "http_status=%s error_code=%s error_message=%s error_type=%s",
+                        document_id,
+                        getattr(cleanup_exc, "status_code", None) or "none",
+                        getattr(cleanup_exc, "error_code", None) or "unknown",
+                        _safe_error_field(getattr(cleanup_exc, "error_message", None)) or "omitted",
+                        type(cleanup_exc).__name__,
+                    )
+                else:
+                    logger.info(
+                        "rag=syllabus stage=storage_cleanup status=completed document_id=%s",
+                        document_id,
+                    )
+            else:
+                logger.warning("cloud=syllabus_persist status=uncertain document=%s", document_id)
+            raise
+        except CloudRepositoryError:
+            # A transport failure may have happened after Postgres committed.
+            # Keep the PDF and the caller's stable ID for an idempotent retry.
+            logger.warning("cloud=syllabus_persist status=uncertain document=%s", document_id)
+            raise
+
+        logger.info(
+            "rag=syllabus stage=rpc_persist status=response_received document_id=%s chunks=%d",
+            document_id,
+            len(chunk_data),
+        )
+
+        if not isinstance(result, dict) or result.get("document_id") != document_id:
+            # The RPC may have committed; never delete Storage on an invalid or
+            # truncated success response because the outcome is ambiguous.
+            logger.error(
+                "rag=syllabus stage=rpc_persist status=invalid_response "
+                "document_id=%s chunks=%d",
+                document_id,
+                len(chunk_data),
+            )
+            raise CloudRepositoryError("Database returned an invalid syllabus result.")
+        if result.get("chunk_count") != len(chunk_data):
+            logger.error(
+                "rag=syllabus stage=rpc_persist status=incomplete_response "
+                "document_id=%s expected_chunks=%d",
+                document_id,
+                len(chunk_data),
+            )
+            raise CloudRepositoryError("Database returned an incomplete syllabus result.")
+        logger.info(
+            "rag=syllabus stage=rpc_persist status=completed document_id=%s chunks=%d",
+            document_id,
+            len(chunk_data),
+        )
+        return {
+            "document_id": document_id,
+            "source_path": path,
+            "chunk_count": len(chunk_data),
+        }
+
+    def match_syllabus_chunks(
+        self,
+        query_embedding: list[float] | tuple[float, ...],
+        *,
+        match_count: int = 10,
+        subject: str | None = None,
+        document_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        vector = self._validated_embedding(query_embedding, field="query_embedding")
+        if type(match_count) is not int or not 1 <= match_count <= 100:
+            raise ValueError("match_count must be an integer from 1 to 100.")
+        if subject is not None and not isinstance(subject, str):
+            raise ValueError("subject must be a string or null.")
+        if document_id is not None:
+            try:
+                document_id = str(UUID(document_id))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ValueError("document_id must be a UUID.") from exc
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/quizpdf_match_syllabus_chunks",
+            json_data={
+                "query_embedding": vector,
+                "p_match_count": match_count,
+                "p_subject": subject,
+                "p_document_id": document_id,
+            },
+        )
+        if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
+            raise CloudRepositoryError("Database returned invalid syllabus matches.")
+        return result
+
+    def list_syllabus_documents(self) -> list[dict[str, Any]]:
+        """List documents visible to this authenticated JWT under RLS."""
+        result = self._request(
+            "GET",
+            "/rest/v1/syllabus_documents",
+            params={
+                "select": (
+                    "id,title,subject,source_file,processing_status,"
+                    "created_at,updated_at,metadata"
+                ),
+                "order": "created_at.desc",
+            },
+        )
+        if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
+            raise CloudRepositoryError("Database returned invalid syllabus documents.")
+        return result
+
+    def get_syllabus_document(self, document_id: str) -> dict[str, Any] | None:
+        """Fetch one document; RLS makes another owner's document invisible."""
+        try:
+            resolved_id = str(UUID(document_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("document_id must be a UUID.") from exc
+        result = self._request(
+            "GET",
+            "/rest/v1/syllabus_documents",
+            params={
+                "select": (
+                    "id,title,subject,source_file,processing_status,"
+                    "created_at,updated_at,metadata,syllabus_chunks(count)"
+                ),
+                "id": f"eq.{resolved_id}",
+                "limit": "1",
+            },
+        )
+        if not isinstance(result, list) or any(not isinstance(row, dict) for row in result):
+            raise CloudRepositoryError("Database returned an invalid syllabus document.")
+        return result[0] if result else None
 
     def save_exam_bundle(
         self,

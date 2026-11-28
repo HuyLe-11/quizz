@@ -5,6 +5,7 @@ The authentication gateway verifies the caller's JWT.
 """
 
 import logging
+import hashlib
 import os
 import threading
 import time
@@ -40,8 +41,31 @@ try:
         CloudReviewService,
     )
     from backend.network.main import (
+        MAX_PDF_BYTES,
         _question_response,
         _read_upload,
+    )
+    from backend.rag.gemini_service import (
+        GeminiAPIError,
+        GeminiService,
+        GeminiServiceError,
+        GeminiValidationError,
+    )
+    from backend.rag.syllabus_ingestion import SyllabusEmbeddingError
+    from backend.rag.syllabus_parser import (
+        SyllabusPDFEncryptedError,
+        SyllabusPDFError,
+        SyllabusPDFNoTextError,
+    )
+    from backend.rag.syllabus_rag_service import (
+        SyllabusRAGError,
+        SyllabusRAGPersistenceError,
+        SyllabusRAGService,
+    )
+    from backend.rag.question_generation import (
+        MAX_TOP_K as MAX_QUESTION_TOP_K,
+        QuestionGenerationService,
+        QuestionOutputError,
     )
     from backend.network.upload_jobs import (
         Progress,
@@ -63,8 +87,31 @@ except ModuleNotFoundError as exc:
         CloudReviewService,
     )
     from network.main import (
+        MAX_PDF_BYTES,
         _question_response,
         _read_upload,
+    )
+    from rag.gemini_service import (
+        GeminiAPIError,
+        GeminiService,
+        GeminiServiceError,
+        GeminiValidationError,
+    )
+    from rag.syllabus_ingestion import SyllabusEmbeddingError
+    from rag.syllabus_parser import (
+        SyllabusPDFEncryptedError,
+        SyllabusPDFError,
+        SyllabusPDFNoTextError,
+    )
+    from rag.syllabus_rag_service import (
+        SyllabusRAGError,
+        SyllabusRAGPersistenceError,
+        SyllabusRAGService,
+    )
+    from rag.question_generation import (
+        MAX_TOP_K as MAX_QUESTION_TOP_K,
+        QuestionGenerationService,
+        QuestionOutputError,
     )
     from network.upload_jobs import (
         Progress,
@@ -74,9 +121,24 @@ except ModuleNotFoundError as exc:
 
 
 logger = logging.getLogger("quizpdf")
+logger.info("app=quizpdf cloud_api_loaded module=%s", __file__)
 
 Identity = tuple[str, str]
 SIGNED_URL_EXPIRATION_SECONDS = 600
+MAX_SYLLABUS_PDF_BYTES = MAX_PDF_BYTES
+
+
+class SyllabusSearchPayload(BaseModel):
+    query: str = Field(min_length=1, max_length=8000)
+    top_k: int = Field(default=10, ge=1, le=100)
+
+
+class SyllabusQuestionGenerationPayload(BaseModel):
+    topic: str = Field(min_length=1, max_length=300)
+    question_count: int = Field(default=5, ge=1, le=10)
+    difficulty: str = Field(default="medium", pattern="^(easy|medium|hard)$")
+    language: str = Field(default="Vietnamese", min_length=1, max_length=40)
+    top_k: int = Field(default=8, ge=1, le=MAX_QUESTION_TOP_K)
 
 
 class AttemptPayload(BaseModel):
@@ -530,6 +592,388 @@ def health():
         "data": {
             "status": "ok",
             "storage_backend": "supabase",
+        },
+    }
+
+
+async def _read_syllabus_upload(file: UploadFile) -> tuple[bytes, str]:
+    filename = (file.filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    media_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if not filename.lower().endswith(".pdf") or media_type != "application/pdf":
+        await file.close()
+        raise HTTPException(
+            status_code=415,
+            detail="Upload a PDF file with the application/pdf content type.",
+        )
+
+    try:
+        contents = await file.read(MAX_SYLLABUS_PDF_BYTES + 1)
+    finally:
+        await file.close()
+    if len(contents) > MAX_SYLLABUS_PDF_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Syllabus PDF exceeds the {MAX_SYLLABUS_PDF_BYTES // (1024 * 1024)} MiB limit.",
+        )
+    if not contents:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty.")
+    return contents, filename
+
+
+def _syllabus_public_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Return safe metadata only; never expose storage paths or vectors."""
+    metadata = document.get("metadata") or {}
+    public_metadata = {
+        key: metadata[key]
+        for key in ("embedding_model", "embedding_dimensions")
+        if isinstance(metadata, dict) and key in metadata
+    }
+    return {
+        "document_id": document.get("id"),
+        "title": document.get("title"),
+        "subject": document.get("subject"),
+        "source_file": document.get("source_file"),
+        "processing_status": document.get("processing_status"),
+        "created_at": document.get("created_at"),
+        "updated_at": document.get("updated_at"),
+        "metadata": public_metadata,
+    }
+
+
+def _syllabus_http_error(exc: SyllabusRAGError) -> HTTPException:
+    cause: BaseException | None = exc
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        message = str(cause)
+        if isinstance(cause, SyllabusPDFNoTextError):
+            return HTTPException(status_code=422, detail=message)
+        if isinstance(cause, (SyllabusPDFEncryptedError, SyllabusPDFError)):
+            return HTTPException(status_code=400, detail=message)
+        if isinstance(cause, SyllabusEmbeddingError):
+            if "HTTP 429" in message:
+                return HTTPException(
+                    status_code=503,
+                    detail="Gemini quota is temporarily exhausted. Retry later.",
+                    headers={"Retry-After": "30"},
+                )
+            return HTTPException(
+                status_code=502,
+                detail="Gemini could not create all syllabus embeddings. Retry later.",
+            )
+        if "GEMINI_API_KEY" in message:
+            return HTTPException(
+                status_code=503,
+                detail="Syllabus embedding is not configured on the backend.",
+            )
+        cause = cause.__cause__ or cause.__context__
+    if isinstance(exc, SyllabusRAGPersistenceError):
+        return HTTPException(
+            status_code=502,
+            detail="Syllabus persistence did not complete. Retry the same prepared operation.",
+        )
+    return HTTPException(
+        status_code=502,
+        detail="Could not complete syllabus ingestion. Retry later.",
+    )
+
+
+def _ingest_syllabus_sync(
+    identity: Identity,
+    contents: bytes,
+    filename: str,
+    title: str,
+    subject: str | None,
+    document_id: str | None,
+):
+    with CloudRepository(*identity) as repository:
+        source_digest = hashlib.sha256(contents).hexdigest()
+        if document_id is not None:
+            existing = repository.get_syllabus_document(document_id)
+            if existing is not None:
+                metadata = existing.get("metadata") or {}
+                if (
+                    metadata.get("source_sha256") != source_digest
+                    or existing.get("title") != title
+                    or existing.get("subject") != subject
+                    or existing.get("source_file") != filename
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="document_id is already associated with different syllabus input.",
+                    )
+                counts = existing.get("syllabus_chunks") or []
+                count = counts[0].get("count", 0) if counts and isinstance(counts[0], dict) else 0
+                return {
+                    "document_id": existing["id"],
+                    "status": existing.get("processing_status", "completed"),
+                    "chunk_count": count,
+                }
+        service = SyllabusRAGService(repository)
+        result = service.ingest_and_persist(
+            contents,
+            title=title,
+            subject=subject,
+            source_file=filename,
+            document_id=document_id,
+            metadata={"source_sha256": source_digest},
+        )
+        return {
+            "document_id": result.document_id,
+            "status": "completed",
+            "chunk_count": result.chunk_count,
+        }
+
+
+@app.post("/api/syllabi")
+async def create_syllabus(
+    identity: CurrentIdentity,
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    subject: str | None = Form(None),
+    document_id: str | None = Form(None),
+):
+    if not title.strip():
+        await file.close()
+        raise HTTPException(status_code=422, detail="title must not be empty.")
+    if subject is not None and not subject.strip():
+        subject = None
+    if document_id is not None:
+        try:
+            document_id = str(uuid.UUID(document_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            await file.close()
+            raise HTTPException(status_code=422, detail="document_id must be a UUID.") from exc
+    contents, filename = await _read_syllabus_upload(file)
+    try:
+        result = await run_in_threadpool(
+            _ingest_syllabus_sync,
+            identity,
+            contents,
+            filename,
+            title.strip(),
+            subject,
+            document_id,
+        )
+    except SyllabusRAGError as exc:
+        http_error = _syllabus_http_error(exc)
+        if isinstance(exc, SyllabusRAGPersistenceError):
+            cause = exc.__cause__
+            logger.error(
+                "rag=syllabus stage=api_persistence status=failed document_id=%s "
+                "http_status=%s error_code=%s error_type=%s",
+                exc.prepared.document_id,
+                getattr(cause, "status_code", None) or "none",
+                getattr(cause, "error_code", None) or "unknown",
+                type(cause).__name__ if cause is not None else "unknown",
+            )
+            http_error.headers = {
+                **(http_error.headers or {}),
+                "X-Syllabus-Document-ID": exc.prepared.document_id,
+            }
+        raise http_error from exc
+
+    return {
+        "success": True,
+        "data": {
+            "document_id": result["document_id"],
+            "title": title.strip(),
+            "subject": subject,
+            "status": result["status"],
+            "chunk_count": result["chunk_count"],
+        },
+    }
+
+
+@app.get("/api/syllabi")
+def list_syllabi(identity: CurrentIdentity):
+    with CloudRepository(*identity) as repository:
+        documents = repository.list_syllabus_documents()
+    return {
+        "success": True,
+        "data": [_syllabus_public_document(document) for document in documents],
+    }
+
+
+@app.get("/api/syllabi/{document_id}")
+def get_syllabus(document_id: str, identity: CurrentIdentity):
+    try:
+        with CloudRepository(*identity) as repository:
+            document = repository.get_syllabus_document(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="document_id must be a UUID.") from exc
+    if document is None:
+        raise HTTPException(status_code=404, detail="Syllabus not found.")
+    return {"success": True, "data": _syllabus_public_document(document)}
+
+
+def _search_syllabus_sync(
+    identity: Identity,
+    document_id: str,
+    query: str,
+    top_k: int,
+) -> list[dict[str, Any]] | None:
+    with CloudRepository(*identity) as repository:
+        document = repository.get_syllabus_document(document_id)
+        if document is None:
+            return None
+        gemini = GeminiService()
+        try:
+            vector = gemini.embed_text(
+                query,
+                task_type="RETRIEVAL_QUERY",
+                output_dimensionality=1536,
+            )
+        finally:
+            gemini.close()
+        return repository.match_syllabus_chunks(
+            vector,
+            match_count=top_k,
+            document_id=document_id,
+        )
+
+
+@app.post("/api/syllabi/{document_id}/search")
+async def search_syllabus(
+    document_id: str,
+    payload: SyllabusSearchPayload,
+    identity: CurrentIdentity,
+):
+    if not payload.query.strip():
+        raise HTTPException(status_code=422, detail="query must not be empty.")
+    try:
+        matches = await run_in_threadpool(
+            _search_syllabus_sync,
+            identity,
+            document_id,
+            payload.query.strip(),
+            payload.top_k,
+        )
+    except GeminiAPIError as exc:
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini quota is temporarily exhausted. Retry later.",
+                headers={"Retry-After": "30"},
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Gemini query embedding failed. Retry later.",
+        ) from exc
+    except GeminiValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GeminiServiceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini query embedding is unavailable. Retry later.",
+        ) from exc
+
+    if matches is None:
+        raise HTTPException(status_code=404, detail="Syllabus not found.")
+    return {
+        "success": True,
+        "data": {
+            "document_id": document_id,
+            "query": payload.query.strip(),
+            "matches": [
+                {
+                    "chunk_id": match.get("chunk_id"),
+                    "chunk_index": match.get("chunk_index"),
+                    "content": match.get("content"),
+                    "similarity": match.get("similarity"),
+                    "source_pages": match.get("source_pages"),
+                    "section_heading": match.get("section_heading"),
+                }
+                for match in matches
+            ],
+        },
+    }
+
+
+def _generate_syllabus_questions_sync(
+    identity: Identity,
+    document_id: str,
+    payload: SyllabusQuestionGenerationPayload,
+) -> Any:
+    with CloudRepository(*identity) as repository:
+        service = QuestionGenerationService()
+        try:
+            return service.generate(
+                repository,
+                document_id=document_id,
+                topic=payload.topic.strip(),
+                question_count=payload.question_count,
+                difficulty=payload.difficulty,
+                language=payload.language.strip(),
+                top_k=payload.top_k,
+            )
+        finally:
+            service.close()
+
+
+@app.post("/api/syllabi/{document_id}/generate")
+async def generate_syllabus_questions(
+    document_id: str,
+    payload: SyllabusQuestionGenerationPayload,
+    identity: CurrentIdentity,
+):
+    if not payload.topic.strip() or not payload.language.strip():
+        raise HTTPException(status_code=422, detail="topic and language must not be empty.")
+    try:
+        result = await run_in_threadpool(
+            _generate_syllabus_questions_sync, identity, document_id, payload
+        )
+    except GeminiAPIError as exc:
+        if exc.status_code == 429:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini quota is temporarily exhausted. Retry later.",
+                headers={"Retry-After": "30"},
+            ) from exc
+        raise HTTPException(
+            status_code=502,
+            detail="Question generation service failed. Retry later.",
+        ) from exc
+    except QuestionOutputError as exc:
+        logger.warning("rag=question_generation output_validation=failed reason=%s", str(exc))
+        raise HTTPException(
+            status_code=502,
+            detail="Question generation returned an invalid response. Retry later.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GeminiServiceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Question generation service is unavailable. Retry later.",
+        ) from exc
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Syllabus not found.")
+    return {
+        "success": True,
+        "data": {
+            "document_id": result.document_id,
+            "document_title": result.document_title,
+            "topic": result.topic,
+            "status": result.status,
+            "message": result.message,
+            "questions": [
+                {
+                    "question": question.question,
+                    "options": [
+                        {"label": chr(ord("A") + index), "content": option}
+                        for index, option in enumerate(question.options)
+                    ],
+                    "correct_answer_index": question.correct_answer_index,
+                    "correct_answer": chr(ord("A") + question.correct_answer_index),
+                    "explanation": question.explanation,
+                    "difficulty": question.difficulty,
+                    "grounding_type": question.grounding_type,
+                    "source_references": list(question.source_references),
+                }
+                for question in result.questions
+            ],
         },
     }
 

@@ -12,6 +12,25 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 logger = logging.getLogger("quizpdf")
 
 
+def build_auth_user_request(
+    supabase_url: str,
+    publishable_key: str,
+    access_token: str,
+) -> tuple[str, dict[str, str]]:
+    """Build the Auth user-verification request used by the gateway.
+
+    Keeping this contract shared prevents diagnostics and API authentication
+    from drifting in URL or header construction.
+    """
+    return (
+        f"{supabase_url.strip().rstrip('/')}/auth/v1/user",
+        {
+            "apikey": publishable_key.strip(),
+            "Authorization": f"Bearer {access_token.strip()}",
+        },
+    )
+
+
 def _unauthorized(message: str) -> JSONResponse:
     return JSONResponse(
         status_code=401,
@@ -115,16 +134,15 @@ class SupabaseAuthGateway:
             return
 
         try:
+            auth_url, auth_headers = build_auth_user_request(
+                supabase_url,
+                publishable_key,
+                token,
+            )
             async with httpx.AsyncClient(
                 timeout=10.0,
             ) as client:
-                result = await client.get(
-                    f"{supabase_url}/auth/v1/user",
-                    headers={
-                        "apikey": publishable_key,
-                        "Authorization": f"Bearer {token}",
-                    },
-                )
+                result = await client.get(auth_url, headers=auth_headers)
 
         except httpx.RequestError:
             logger.warning(

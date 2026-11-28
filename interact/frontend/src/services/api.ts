@@ -28,8 +28,51 @@ const API_BASE_URL = `${API_ORIGIN}/api`;
 const REQUEST_TIMEOUT_MS = 20_000;
 const EXAM_LOAD_TIMEOUT_MS = 120_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
+const SYLLABUS_TIMEOUT_MS = 600_000;
 const POLLING_INTERVAL_MS = 2_000;
 const MAX_POLLING_TIME_MS = 600_000;
+
+export interface SyllabusDocument {
+    document_id: string;
+    title: string;
+    subject: string | null;
+    source_file: string;
+    processing_status: string;
+    created_at: string;
+    updated_at: string;
+    metadata: Record<string, unknown>;
+}
+
+export interface SyllabusUploadResult {
+    document_id: string;
+    title: string;
+    subject: string | null;
+    status: string;
+    chunk_count: number;
+}
+
+export interface GeneratedSyllabusQuestion {
+    question: string;
+    options: Array<{ label: string; content: string }>;
+    correct_answer_index: number;
+    correct_answer: string;
+    explanation: string;
+    difficulty: "easy" | "medium" | "hard";
+    grounding_type: "source_supported" | "syllabus_aligned";
+    source_references: Array<{
+        chunk_id: string;
+        source_pages: number[];
+    }>;
+}
+
+export interface SyllabusQuestionGenerationResult {
+    document_id: string;
+    document_title: string;
+    topic: string;
+    status: "generated" | "insufficient_context";
+    message: string | null;
+    questions: GeneratedSyllabusQuestion[];
+}
 
 export function resolveApiUrl(
     path: string | null | undefined,
@@ -257,6 +300,51 @@ export async function getProcessedExams(): Promise<
     ProcessedExamSummary[]
 > {
     return fetchApi<ProcessedExamSummary[]>("/exams");
+}
+
+// Authenticated syllabus RAG endpoints.
+
+export async function getSyllabi(): Promise<SyllabusDocument[]> {
+    return fetchApi<SyllabusDocument[]>("/syllabi");
+}
+
+export async function uploadSyllabus(
+    file: File,
+    title: string,
+    subject?: string,
+): Promise<SyllabusUploadResult> {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("title", title);
+    if (subject?.trim()) {
+        formData.append("subject", subject.trim());
+    }
+
+    return fetchApi<SyllabusUploadResult>(
+        "/syllabi",
+        { method: "POST", body: formData },
+        SYLLABUS_TIMEOUT_MS,
+    );
+}
+
+export async function generateSyllabusQuestions(
+    documentId: string,
+    request: {
+        topic: string;
+        question_count: number;
+        difficulty: "easy" | "medium" | "hard";
+        language: string;
+        top_k?: number;
+    },
+): Promise<SyllabusQuestionGenerationResult> {
+    return fetchApi<SyllabusQuestionGenerationResult>(
+        `/syllabi/${encodeURIComponent(documentId)}/generate`,
+        {
+            method: "POST",
+            body: JSON.stringify(request),
+        },
+        SYLLABUS_TIMEOUT_MS,
+    );
 }
 
 // Question image and red-mark detection endpoints.
